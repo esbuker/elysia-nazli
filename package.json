@@ -1,0 +1,64 @@
+{
+  "name": "elysia-nazli",
+  "version": "0.1.0",
+  "description": "Production-friendly, store-pluggable rate limiting plugin for Elysia on Bun.",
+  "license": "MIT",
+  "author": "Enes Sacid Büker (https://github.com/EnesSacid-Buker)",
+  "homepage": "https://github.com/EnesSacid-Buker/elysia-nazli#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/EnesSacid-Buker/elysia-nazli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/EnesSacid-Buker/elysia-nazli/issues"
+  },
+  "type": "module",
+  "engines": {
+    "bun": ">=1.1.0"
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "elysia",
+    "bun",
+    "rate-limit",
+    "rate-limiter",
+    "api",
+    "plugin",
+    "sqlite",
+    "redis"
+  ],
+  "peerDependencies": {
+    "elysia": "^1.4.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "bun test tests",
+    "bench": "bun run src/benchmark.ts",
+    "bench:help": "bun run src/benchmark.ts -- --help",
+    "bench:example": "bun run src/benchmark.ts -- -m ./examples/bench.stores.example.ts",
+    "clean": "rm -rf dist",
+    "build:js": "bun build ./src/index.ts --outdir ./dist --target bun --format esm --production --external elysia",
+    "build:types": "tsc -p tsconfig.build.json",
+    "size": "bun run ./scripts/sizeReport.ts",
+    "build": "bun run clean && bun run build:js && bun run build:types && bun run size",
+    "release:check": "bun run typecheck && bun run test && bun run build"
+  }
+}

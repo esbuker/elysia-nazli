@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Logs and OS noise
+*.log
+.DS_Store
+
+# Local env (never commit secrets)
+.env
+.env.*
+!.env.example
+
+# Local benchmark artifacts (not deleted after bench)
+tmp/
