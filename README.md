@@ -23,7 +23,7 @@ Built for real services where a single global limit just doesn’t cut it.
 
 ## Compatibility
 
-- **Runtime:** Bun (`>=1.3.13`) is required.
+- **Runtime:** Bun (`>=1.3.13`) is required (see [`package.json`](./package.json) `engines`).
 - **Node.js:** Not reliably supported right now. The shipped `main` bundle imports SQLite infrastructure, which can break plain Node.js loading.
 - **Why:** `{ type: 'sqlite' }` uses `bun:sqlite`, and `createBunRedisStore` relies on Bun Redis APIs.
 - **Workaround:** You can use `memory` or a custom `RateLimitStore`, but package loading is still Bun-first.
@@ -34,7 +34,7 @@ Built for real services where a single global limit just doesn’t cut it.
 bun add elysia-nazli
 ```
 
-Peer dependency: **`elysia`** `^1.4.0`. Runtime: **`bun`** `>=1.1.0` (see [`package.json`](./package.json) `engines`).
+Peer dependency: **`elysia`** `^1.4.0`.
 
 ## Quick start
 
