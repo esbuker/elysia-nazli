@@ -38,6 +38,24 @@ Peer dependency: **`elysia`** `^1.4.0`.
 
 ## Quick start
 
+**Global only:**
+
+```ts
+import { Elysia } from 'elysia'
+import { rateLimit } from 'elysia-nazli'
+
+const app = new Elysia()
+  .use(
+    rateLimit({
+      namespace: 'my-api',
+      global: { id: 'global', limit: 120, windowMs: 60_000 }
+    })
+  )
+  .get('/', () => 'ok')
+```
+
+**Global plus per-route rules** (optional):
+
 ```ts
 import { Elysia } from 'elysia'
 import { rateLimit } from 'elysia-nazli'
