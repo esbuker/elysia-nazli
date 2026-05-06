@@ -3,14 +3,14 @@
   "version": "0.1.0",
   "description": "Production-friendly, store-pluggable rate limiting plugin for Elysia on Bun.",
   "license": "MIT",
-  "author": "Enes Sacid Büker (https://github.com/EnesSacid-Buker)",
-  "homepage": "https://github.com/EnesSacid-Buker/elysia-nazli#readme",
+  "author": "Enes Büker (https://github.com/esbuker)",
+  "homepage": "https://github.com/esbuker/elysia-nazli#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/EnesSacid-Buker/elysia-nazli.git"
+    "url": "https://github.com/esbuker/elysia-nazli.git"
   },
   "bugs": {
-    "url": "https://github.com/EnesSacid-Buker/elysia-nazli/issues"
+    "url": "https://github.com/esbuker/elysia-nazli/issues"
   },
   "type": "module",
   "engines": {

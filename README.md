@@ -1,7 +1,7 @@
 # elysia-nazli
 
-[![CI](https://github.com/EnesSacid-Buker/elysia-nazli/actions/workflows/ci.yml/badge.svg)](https://github.com/EnesSacid-Buker/elysia-nazli/actions/workflows/ci.yml)
-[![Bundle size (gzip)](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FEnesSacid-Buker%2Felysia-nazli%2Fmaster%2F.github%2Fbundle-size.json&query=%24.gzip&label=bundle%20%28gzip%29&logo=github)](https://github.com/EnesSacid-Buker/elysia-nazli/blob/master/.github/bundle-size.json)
+[![CI](https://github.com/esbuker/elysia-nazli/actions/workflows/ci.yml/badge.svg)](https://github.com/esbuker/elysia-nazli/actions/workflows/ci.yml)
+[![Bundle size (gzip)](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fesbuker%2Felysia-nazli%2Fmaster%2F.github%2Fbundle-size.json&query=%24.gzip&label=bundle%20%28gzip%29&logo=github)](https://github.com/esbuker/elysia-nazli/blob/master/.github/bundle-size.json)
 
 Production-friendly, store-pluggable **rate limiting** for **[Elysia](https://elysiajs.com)** on **[Bun](https://bun.sh)**.
 
