@@ -8,7 +8,6 @@
  * and cannot live under `node_modules`. See `src/bench/safeBenchPath.ts`.
  */
 
-import { rmdir } from 'fs/promises'
 import path from 'bun:path'
 
 import { BENCH_HELP, parseBenchCli, resolveBenchModuleUserPath } from './bench/cli'
@@ -45,6 +44,19 @@ const cleanupBenchSqliteArtifacts = async (dbPath: string) => {
   await removeIfExists(`${dbPath}-shm`)
 }
 
+/** Empty directory only (`rmdir` / `cmd rmdir`). */
+const tryRemoveEmptyDir = async (dirPath: string) => {
+  const cmd =
+    process.platform === 'win32'
+      ? (['cmd', '/c', 'rmdir', dirPath] as const)
+      : (['rmdir', dirPath] as const)
+  try {
+    return (await Bun.spawn([...cmd], { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' }).exited) === 0
+  } catch {
+    return false
+  }
+}
+
 /** Remove the DB directory and empty parents, but not above `process.cwd()`. */
 const removeBenchSqliteDirsIfEmpty = async (dbPath: string) => {
   if (dbPath === ':memory:') return
@@ -53,11 +65,7 @@ const removeBenchSqliteDirsIfEmpty = async (dbPath: string) => {
   for (;;) {
     const rel = path.relative(cwd, dir)
     if (rel === '' || rel.startsWith('..')) break
-    try {
-      await rmdir(dir)
-    } catch {
-      break
-    }
+    if (!(await tryRemoveEmptyDir(dir))) break
     const next = path.dirname(dir)
     if (next === dir) break
     dir = next

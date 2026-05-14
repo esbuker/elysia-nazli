@@ -11,8 +11,9 @@ export const normalizeMethodSet = (method?: string | string[]): Set<string> | un
 }
 
 export const normalizePrefix = (prefix: string) => {
-  if (!prefix.startsWith('/')) return `/${prefix}`
-  return prefix
+  const withLeadingSlash = prefix.startsWith('/') ? prefix : `/${prefix}`
+  const withoutTrailingSlash = withLeadingSlash.replace(/\/+$/, '')
+  return withoutTrailingSlash || '/'
 }
 
 export const sanitizeTableName = (name: string) => {

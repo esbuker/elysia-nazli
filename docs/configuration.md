@@ -21,7 +21,7 @@ Omitted options use the defaults below unless noted.
 | **`onLimit`** | `(payload) => Response \| void \| Promise<...>` | — | When blocked; return custom response or void for default JSON 429. |
 | **`onDecision`** | `(payload) => void \| Promise<void>` | — | Called once per evaluated request for metrics/logging; errors are swallowed. |
 | **`onStoreError`** | `'allow' \| 'block' \| function` | `'allow'` | After primary **and** optional fallback fail. See [production](./production.md). |
-| **`storeTimeoutMs`** | `number` | — | Max time for **each** `store.hit()` (primary and fallback). Omitted = no timeout. Must be finite and ≥ `0` if set. |
+| **`storeTimeoutMs`** | `number` | — | Max wait time for **each** `store.hit()` (primary and fallback). Omitted = no timeout. Must be finite and ≥ `0` if set. This does not abort the underlying store operation. |
 | **`fallbackStore`** | `boolean \| RateLimitStoreConfig` | — | Secondary store tried once when primary throws or times out. See [production](./production.md). |
 
 If **no** `global`, `prefixes`, or `routes` are set, compiled rules are empty and the plugin is a no-op.
@@ -40,7 +40,7 @@ If **no** `global`, `prefixes`, or `routes` are set, compiled rules are empty an
 | **`store`** | No | Overrides plugin default `store` for this rule. |
 | **`standardHeaders` / `legacyHeaders`** | No | Per-rule override for header families (see `shouldUseHeaderFamily` in source). |
 
-**PrefixRule** adds **`prefix`** (normalized to lead with `/`).  
+**PrefixRule** adds **`prefix`** (normalized to lead with `/` and remove trailing slashes, except root `/`) and matches path segments: `/users` matches `/users` and `/users/42`, not `/userspaces`. Prefix `/` is a catch-all.  
 **RouteRule** adds **`path`**: `string` (exact) or `RegExp`.
 
 ## Typed store configs
@@ -67,6 +67,13 @@ On block:
 
 - Status **429**, **`retry-after`**, default JSON `{ "error": "Too Many Requests", "retryAfter": <seconds> }` unless **`onLimit`** returns a `Response`.  
 - Custom responses from **`onLimit`** get missing rate-limit headers **merged** from the plugin unless you already set them.
+
+Reset header semantics:
+
+| Header | Meaning |
+|--------|---------|
+| **`ratelimit-reset`** | Seconds until reset |
+| **`x-ratelimit-reset`** | Epoch seconds at reset |
 
 ## `StoreErrorContext` (for `onStoreError` functions)
 

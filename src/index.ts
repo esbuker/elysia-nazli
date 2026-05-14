@@ -138,7 +138,7 @@ export const rateLimit = (options: RateLimitPluginOptions = {}) => {
         return
       }
 
-      const blockedBy = decisions.find((d) => d.blocked)
+      const blockedBy = pickHeaderDecision(decisions.filter((d) => d.blocked))
       const headerDecision = blockedBy ?? pickHeaderDecision(decisions)
       if (!headerDecision) {
         await emitDecision(ctxAsContext, decisions, undefined, now, storeLatencyMs)

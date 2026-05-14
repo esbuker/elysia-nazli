@@ -14,11 +14,10 @@ So the same human “client” gets **one counter per rule** they trigger, becau
 
 ## Matching layers
 
-Rules are evaluated in this order of *eligibility* (all that match stay in the list; order affects `retry-after` when multiple rules block):
+Rules are evaluated in this order of *eligibility* (all that match stay in the list):
 
 - **`global`** — applies to every request unless a **`method`** filter excludes it.
-- **`prefixes`** — path must **start with** the configured prefix (string `startsWith`).  
-  **Note:** Prefix `/users` also matches `/userspaces`; tighten with a trailing slash in the prefix if you need `/users/` only.
+- **`prefixes`** — path must match the configured prefix as a path segment. Prefix `/users` matches `/users` and `/users/42`, but not `/userspaces`. Trailing slashes are normalized, so `/users/` behaves like `/users`. Prefix `/` is a catch-all.
 - **`routes`** — path matches an **exact string** or a **RegExp**.
 
 **Method filters:** If a rule defines `method` (or an array), only those HTTP methods are eligible; others skip the rule entirely.
@@ -28,17 +27,15 @@ Rules are evaluated in this order of *eligibility* (all that match stay in the l
 When **several** rules match the same request:
 
 - Each rule’s store is called **independently** (separate keys, separate limits).
-- **Blocking:** The response is **429** if **any** matched rule reports `blocked: true`. There is no averaging or “150 = blend of 100 and 200” — the **strictest** rule that blocks wins for denial of service to the client.
-- **Headers** (`ratelimit-limit`, `ratelimit-remaining`, `ratelimit-reset`): One “header decision” is chosen deterministically among all decisions:
+- **Blocking:** The response is **429** if **any** matched rule reports `blocked: true`. There is no averaging or “150 = blend of 100 and 200”.
+- **Blocked winner:** When more than one rule blocks, `blockedBy`, `retry-after`, and the 429 headers use the strictest blocked decision:
   1. Lowest **`remaining`**
   2. Then highest **`retryAfterMs`**
   3. Then lowest **`limit`**
+  4. If all tie-breakers are equal, existing rule evaluation order is the stable final tie-breaker.
+- **Allowed headers** (`ratelimit-limit`, `ratelimit-remaining`, `ratelimit-reset`): When no rule blocks, the same ordering chooses one deterministic “header decision” among all decisions.
 
-So headers can reflect the tightest quota **visually** while blocking still follows **any-rule blocks**.
-
-## `retry-after` when multiple rules block
-
-When more than one rule blocks, **`retry-after`** (seconds) is derived from the **first** blocked decision in **rule evaluation order** (compile order: global, then prefixes, then routes). Plan rule ordering if this matters for UX.
+So the tightest quota drives both the visual headers and the 429 branch.
 
 ## Bans (`banMs`)
 

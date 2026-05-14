@@ -54,6 +54,8 @@ rateLimit({
 
 Bounds tail latency for slow Redis/SQLite/custom stores. Applies to **each** attempted call (primary and fallback). On timeout, behavior follows **`onStoreError`** (same as throw).
 
+This timeout only stops the request path from waiting. It does **not** cancel the underlying `store.hit()` work; a slow Redis/SQLite/custom operation can still finish in the background. If your backend supports cancellation or its own network timeout, configure that in the store adapter too.
+
 ```ts
 rateLimit({
   store: redisStore,

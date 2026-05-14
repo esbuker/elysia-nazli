@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 
 import { getActiveRules } from '../src/core/ruleMatcher'
+import { normalizePrefix } from '../src/utilities'
 import type { CompiledRule } from '../src/types'
 
 const r = (over: Partial<CompiledRule>): CompiledRule => ({
@@ -23,14 +24,23 @@ describe('getActiveRules', () => {
     expect(getActiveRules(rules, 'POST', '/x').map((x) => x.id)).toEqual(['g'])
   })
 
-  it('matches prefixes by startsWith', () => {
+  it('matches prefixes by path segment', () => {
     const rules = [r({ id: 'p', type: 'prefix', prefix: '/users' })]
     expect(getActiveRules(rules, 'GET', '/users').map((x) => x.id)).toEqual(['p'])
     expect(getActiveRules(rules, 'GET', '/users/42').map((x) => x.id)).toEqual(['p'])
-    expect(getActiveRules(rules, 'GET', '/userspaces')).not.toEqual([])
-    // ^ documents that startsWith treats /userspaces as a prefix match
-    // (callers should add a trailing slash to scope tightly).
+    expect(getActiveRules(rules, 'GET', '/userspaces')).toEqual([])
     expect(getActiveRules(rules, 'GET', '/api')).toEqual([])
+  })
+
+  it('matches descendants for prefixes normalized from trailing slash configs', () => {
+    const rules = [r({ id: 'p', type: 'prefix', prefix: normalizePrefix('/users/') })]
+    expect(getActiveRules(rules, 'GET', '/users/42').map((x) => x.id)).toEqual(['p'])
+  })
+
+  it('treats "/" as a catch-all prefix', () => {
+    const rules = [r({ id: 'root', type: 'prefix', prefix: '/' })]
+    expect(getActiveRules(rules, 'GET', '/').map((x) => x.id)).toEqual(['root'])
+    expect(getActiveRules(rules, 'GET', '/users').map((x) => x.id)).toEqual(['root'])
   })
 
   it('matches routes by exact string', () => {

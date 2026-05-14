@@ -1,8 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import { Database } from 'bun:sqlite'
-import { join } from 'bun:path'
-import { rmSync } from 'fs'
-import { tmpdir } from 'os'
+import path from 'bun:path'
 
 import { SqliteRateLimitStore } from '../src/plugins/sqliteStore'
 
@@ -72,8 +70,12 @@ describe('SqliteRateLimitStore - configuration', () => {
     ).toThrow(/Invalid SQLite table name/)
   })
 
-  it('honors a custom valid table name and persists rows there', () => {
-    const dbPath = join(tmpdir(), `nazli-table-${Date.now()}-${Math.random().toString(36).slice(2)}.sqlite`)
+  it('honors a custom valid table name and persists rows there', async () => {
+    const tmpRoot = Bun.env.TMPDIR ?? Bun.env.TMP ?? Bun.env.TEMP ?? '/tmp'
+    const dbPath = path.join(
+      tmpRoot,
+      `nazli-table-${Date.now()}-${Math.random().toString(36).slice(2)}.sqlite`
+    )
     try {
       const custom = new SqliteRateLimitStore({
         type: 'sqlite',
@@ -103,9 +105,11 @@ describe('SqliteRateLimitStore - configuration', () => {
       expect(rows[0]!.count).toBe(1)
       inspector.close()
     } finally {
-      rmSync(dbPath, { force: true })
-      rmSync(`${dbPath}-wal`, { force: true })
-      rmSync(`${dbPath}-shm`, { force: true })
+      await Promise.all(
+        [dbPath, `${dbPath}-wal`, `${dbPath}-shm`].map((p) =>
+          Bun.file(p).unlink().catch(() => undefined)
+        )
+      )
     }
   })
 

@@ -26,12 +26,14 @@ describe('compileRules', () => {
     const rules = compileRules({
       prefixes: [
         { id: 'p1', prefix: 'api', limit: 10, windowMs: 1000 },
-        { id: 'p2', prefix: '/users', limit: 10, windowMs: 1000 }
+        { id: 'p2', prefix: '/users', limit: 10, windowMs: 1000 },
+        { id: 'p3', prefix: '/reports/', limit: 10, windowMs: 1000 }
       ]
     })
 
     expect(find(rules, 'p1')!.prefix).toBe('/api')
     expect(find(rules, 'p2')!.prefix).toBe('/users')
+    expect(find(rules, 'p3')!.prefix).toBe('/reports')
     expect(find(rules, 'p1')!.type).toBe('prefix')
   })
 

@@ -12,6 +12,12 @@ Welcome. These guides go deeper than the [project README](../README.md).
 | [Production & resilience](./production.md) | `onStoreError`, `fallbackStore`, timeouts, observability, Redis atomic mode, scaling |
 | [Examples & patterns](./examples.md) | Full production-style config, keying strategies, JWT / IP caveats |
 
+## Upgrade notes
+
+- Prefix matching is path-segment aware: `/users` no longer matches `/userspaces`.
+- Prefix trailing slashes are normalized: `/users/` behaves like `/users`, including matching the bare `/users` path.
+- When multiple rules block, `blockedBy` and `retry-after` use the strictest blocked decision, not the first blocking rule in compile order.
+
 ## Benchmarks
 
 From the repository root:

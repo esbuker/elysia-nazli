@@ -81,6 +81,13 @@ describe('normalizePrefix', () => {
     expect(normalizePrefix('/users')).toBe('/users')
   })
 
+  it('removes trailing slashes while preserving root', () => {
+    expect(normalizePrefix('/users/')).toBe('/users')
+    expect(normalizePrefix('users/')).toBe('/users')
+    expect(normalizePrefix('/users//')).toBe('/users')
+    expect(normalizePrefix('/')).toBe('/')
+  })
+
   it('does not collapse repeated slashes (caller responsibility)', () => {
     expect(normalizePrefix('//users')).toBe('//users')
   })

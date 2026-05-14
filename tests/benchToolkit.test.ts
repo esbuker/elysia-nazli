@@ -1,12 +1,23 @@
 import { afterEach, describe, expect, it } from 'bun:test'
-import { mkdir, mkdtemp, symlink, writeFile } from 'fs/promises'
-import { tmpdir } from 'os'
 import path from 'bun:path'
+import { symlink } from 'node:fs/promises'
 
 import { benchmarkStoreHits } from '../src/bench/hitLoop'
 import { parseBenchCli, resolveBenchModuleUserPath } from '../src/bench/cli'
 import { benchModuleFileUrl } from '../src/bench/safeBenchPath'
 import { MemoryRateLimitStore } from '../src/index'
+
+const uniqTemp = (prefix: string) =>
+  path.join(Bun.env.TMPDIR ?? Bun.env.TMP ?? Bun.env.TEMP ?? '/tmp', `${prefix}${crypto.randomUUID()}`)
+
+async function trySymlink(target: string, link: string) {
+  try {
+    await symlink(target, link)
+    return true
+  } catch {
+    return false
+  }
+}
 
 describe('parseBenchCli', () => {
   it('parses --module and --keep', () => {
@@ -62,9 +73,9 @@ describe('resolveBenchModuleUserPath', () => {
 
 describe('benchModuleFileUrl', () => {
   it('accepts a .ts file under project root', async () => {
-    const root = await mkdtemp(path.join(tmpdir(), 'nazli-bench-'))
+    const root = uniqTemp('nazli-bench-')
     const f = path.join(root, 'mod.ts')
-    await writeFile(f, 'export const benchStores = []\n')
+    await Bun.write(f, 'export const benchStores = []\n')
     const href = await benchModuleFileUrl('./mod.ts', root)
     expect(href.startsWith('file:')).toBeTrue()
     expect(href.endsWith('mod.ts')).toBeTrue()
@@ -75,14 +86,13 @@ describe('benchModuleFileUrl', () => {
   })
 
   it('rejects paths that escape via symlink', async () => {
-    const root = await mkdtemp(path.join(tmpdir(), 'nazli-bench-root-'))
-    const outside = await mkdtemp(path.join(tmpdir(), 'nazli-bench-out-'))
+    const root = uniqTemp('nazli-bench-root-')
+    await Bun.write(path.join(root, '.nazli-root'), '')
+    const outside = uniqTemp('nazli-bench-out-')
     const target = path.join(outside, 'evil.ts')
-    await writeFile(target, 'export const benchStores = []\n')
+    await Bun.write(target, 'export const benchStores = []\n')
     const link = path.join(root, 'trap.ts')
-    try {
-      await symlink(target, link)
-    } catch {
+    if (!(await trySymlink(target, link))) {
       // Symlinks may be unsupported (e.g. some sandboxes).
       return
     }
@@ -90,18 +100,16 @@ describe('benchModuleFileUrl', () => {
   })
 
   it('rejects node_modules paths', async () => {
-    const root = await mkdtemp(path.join(tmpdir(), 'nazli-bench-'))
-    const nmDir = path.join(root, 'node_modules')
-    await mkdir(nmDir, { recursive: true })
-    const f = path.join(nmDir, 'evil.ts')
-    await writeFile(f, 'export const benchStores = []\n')
+    const root = uniqTemp('nazli-bench-')
+    const f = path.join(root, 'node_modules', 'evil.ts')
+    await Bun.write(f, 'export const benchStores = []\n')
     await expect(benchModuleFileUrl('./node_modules/evil.ts', root)).rejects.toThrow(/node_modules/)
   })
 
   it('requires an allowed explicit file extension', async () => {
-    const root = await mkdtemp(path.join(tmpdir(), 'nazli-bench-ext-'))
+    const root = uniqTemp('nazli-bench-ext-')
     const f = path.join(root, 'noext-module')
-    await writeFile(f, 'export const benchStores = []\n')
+    await Bun.write(f, 'export const benchStores = []\n')
     await expect(benchModuleFileUrl('./noext-module', root)).rejects.toThrow(/explicit extension/)
   })
 })

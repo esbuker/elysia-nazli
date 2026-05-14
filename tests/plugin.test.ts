@@ -6,6 +6,22 @@ import type { HitResult, RateLimitStore, StoreHitInput } from '../src/index'
 
 const TEST_IP = '203.0.113.10'
 
+const getFreePort = () =>
+  new Promise<number>((resolve, reject) => {
+    const server = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      fetch: () => new Response('ok')
+    })
+    const port = server.port
+    server.stop(true)
+    if (port === undefined) {
+      reject(new Error('Could not reserve a free port for the lifecycle test'))
+      return
+    }
+    resolve(port)
+  })
+
 const recording = (
   responder: (input: StoreHitInput) => HitResult
 ): RateLimitStore & { calls: StoreHitInput[] } => {
@@ -198,7 +214,7 @@ describe('rateLimit plugin - matching & headers', () => {
     expect(res.headers.get('ratelimit-limit')).toBeNull()
   })
 
-  it('applies the strictest decision when multiple rules block', async () => {
+  it('uses the stricter header decision when a narrower rule blocks', async () => {
     const app = new Elysia()
       .use(
         rateLimit({
@@ -218,6 +234,80 @@ describe('rateLimit plugin - matching & headers', () => {
     expect(blocked.status).toBe(429)
     // The header decision should reflect the prefix rule (limit: 1), not the global (100).
     expect(blocked.headers.get('ratelimit-limit')).toBe('1')
+  })
+
+  it('uses the strictest blocked decision for retry-after, headers, and onLimit', async () => {
+    let blockedRuleId: string | undefined
+    const store: RateLimitStore = {
+      hit: (input) => {
+        if (input.key.includes(':api:')) {
+          return {
+            key: input.key,
+            count: 2,
+            remaining: 0,
+            limit: input.limit,
+            resetAt: input.now + 60_000,
+            blocked: true,
+            retryAfterMs: 60_000
+          }
+        }
+
+        return {
+          key: input.key,
+          count: 3,
+          remaining: 0,
+          limit: input.limit,
+          resetAt: input.now + 5_000,
+          blocked: true,
+          retryAfterMs: 5_000
+        }
+      }
+    }
+
+    const app = new Elysia()
+      .use(
+        rateLimit({
+          namespace: 'multi-block-strictest',
+          global: { id: 'g', limit: 2, windowMs: 5_000 },
+          prefixes: [{ id: 'api', prefix: '/api', limit: 1, windowMs: 60_000 }],
+          store,
+          cleanupIntervalMs: 0,
+          keyGenerator: () => 'k',
+          onLimit: ({ blockedBy }) => {
+            blockedRuleId = blockedBy.ruleId
+          }
+        })
+      )
+      .get('/api/x', () => 'ok')
+
+    const blocked = await app.handle(new Request('http://localhost/api/x'))
+
+    expect(blocked.status).toBe(429)
+    expect(blockedRuleId).toBe('api')
+    expect(blocked.headers.get('ratelimit-limit')).toBe('1')
+    expect(blocked.headers.get('ratelimit-reset')).toBe('60')
+    expect(blocked.headers.get('retry-after')).toBe('60')
+  })
+
+  it('treats a trailing-slash prefix config as the same subtree', async () => {
+    const app = new Elysia()
+      .use(
+        rateLimit({
+          namespace: 'trailing-prefix',
+          prefixes: [{ id: 'users', prefix: '/users/', limit: 1, windowMs: 60_000 }],
+          store: { type: 'memory' },
+          cleanupIntervalMs: 0,
+          keyGenerator: () => 'k'
+        })
+      )
+      .get('/users/:id', () => 'ok')
+
+    const first = await app.handle(new Request('http://localhost/users/42'))
+    const second = await app.handle(new Request('http://localhost/users/42'))
+
+    expect(first.status).toBe(200)
+    expect(first.headers.get('ratelimit-limit')).toBe('1')
+    expect(second.status).toBe(429)
   })
 
   it('per-rule skip suppresses that rule but keeps others', async () => {
@@ -558,8 +648,9 @@ describe('rateLimit plugin - cleanup lifecycle', () => {
     )
 
     // onStop only fires when the server was actually started.
+    const port = await getFreePort()
     await new Promise<void>((resolve) => {
-      app.listen(0, () => resolve())
+      app.listen(port, () => resolve())
     })
     await app.stop()
     expect(closed).toBe(1)
