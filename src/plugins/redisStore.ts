@@ -73,7 +73,7 @@ const callEval = async (
     return client.eval(ATOMIC_SCRIPT, keys, args)
   }
   if (typeof client.send === 'function') {
-    return client.send('EVAL', [ATOMIC_SCRIPT, String(keys.length), ...keys, ...args])
+    return client.send('EVAL', [ATOMIC_SCRIPT, String(keys.length), ...keys, ...args.map(String)])
   }
   throw new Error('Redis client does not expose eval/send for atomic mode')
 }

@@ -34,10 +34,32 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Start Redis and KeyDB
+        if: runner.os == 'Linux'
+        run: |
+          docker pull redis:7.2-alpine
+          docker pull eqalpha/keydb:latest
+          docker run -d --name redis-nazli-test -p 6379:6379 redis:7.2-alpine
+          docker run -d --name keydb-nazli-test -p 6380:6379 eqalpha/keydb:latest
+
+          for i in {1..30}; do
+            if docker exec redis-nazli-test redis-cli ping && docker exec keydb-nazli-test keydb-cli ping; then
+              exit 0
+            fi
+            sleep 1
+          done
+
+          docker logs redis-nazli-test
+          docker logs keydb-nazli-test
+          exit 1
+
       - name: Typecheck
         run: bun run typecheck
 
       - name: Test
+        env:
+          REDIS_URL: redis://localhost:6379
+          KEYDB_URL: redis://localhost:6380
         run: bun test tests
 
       - name: Build

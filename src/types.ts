@@ -100,7 +100,7 @@ export interface BunRedisClientLike {
     keys: string[],
     args: (string | number)[]
   ): MaybePromise<unknown>
-  send?(command: string, args: (string | number)[]): MaybePromise<unknown>
+  send?(command: string, args: string[]): MaybePromise<unknown>
 }
 
 export interface BunRedisStoreOptions {

@@ -53,6 +53,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "bun test tests",
+    "test:integration": "bun test tests/redis.integration.test.ts",
     "bench": "bun run src/benchmark.ts",
     "bench:help": "bun run src/benchmark.ts -- --help",
     "bench:example": "bun run src/benchmark.ts -- -m ./examples/bench.stores.example.ts",

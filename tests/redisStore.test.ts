@@ -214,7 +214,7 @@ const makeAtomicFake = () => {
   const ttls = new Map<string, number>()
   const calls: { name: string; args: unknown[] }[] = []
   const evalCalls: { script: string; keys: string[]; args: (string | number)[] }[] = []
-  const sendCalls: { command: string; args: (string | number)[] }[] = []
+  const sendCalls: { command: string; args: string[] }[] = []
 
   // Minimal Lua-script emulator that mirrors ATOMIC_SCRIPT exactly.
   const runAtomic = (counterKey: string, banKey: string, cost: number, limit: number, windowMs: number, banMs: number) => {
