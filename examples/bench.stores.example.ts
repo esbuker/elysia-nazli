@@ -2,7 +2,7 @@
  * Copy and export `benchStores` with your own `RateLimitStore` implementations.
  *
  *   bun run bench --
- *   bun run src/benchmark.ts -- -m ./examples/bench.stores.example.ts
+ *   bun run bench/benchmark.ts -- -m ./examples/bench.stores.example.ts
  *   BENCH_ITERATIONS=50000 bun run bench -- -m ./examples/bench.stores.example.ts
  */
 
@@ -15,10 +15,10 @@ const noopAdapter = (): RateLimitStore => ({
     count: 1,
     remaining: input.limit - 1,
     limit: input.limit,
-    resetAt: input.now + input.windowMs,
+    resetAt: input.now + input.window,
     blocked: false,
-    retryAfterMs: 0
-  })
+    retryAfter: 0,
+  }),
 })
 
 export const benchStores = [{ name: 'noop-adapter', store: noopAdapter() }]

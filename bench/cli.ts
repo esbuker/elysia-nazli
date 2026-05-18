@@ -1,7 +1,7 @@
 export const BENCH_HELP = `elysia-nazli benchmark — measure RateLimitStore.hit() throughput
 
 Usage:
-  bun run src/benchmark.ts [options] [--] [<path/to/bench.module.ts>]
+  bun run bench/benchmark.ts [options] [--] [<path/to/bench.module.ts>]
   bun run bench -- [options] [<path/to/bench.module.ts>]
 
 Options:
@@ -46,18 +46,24 @@ export const parseBenchCli = (argv: string[]): ParsedBenchCli => {
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!
+
     if (a === '--help' || a === '-h') {
       help = true
+
       continue
     }
+
     if (a === '--module' || a === '-m') {
       const next = argv[++i]
+
       if (!next || next.startsWith('-')) {
         throw new Error('benchmark: --module requires a file path')
       }
       moduleFlag = next
+
       continue
     }
+
     if (a.startsWith('-')) flags.add(a)
     else positionals.push(a)
   }
@@ -71,14 +77,17 @@ export const parseBenchCli = (argv: string[]): ParsedBenchCli => {
       Bun.env.BENCH_KEEP === 'true',
     noBuiltinStores: flags.has('--no-builtin-stores'),
     moduleFlag,
-    positionals
+    positionals,
   }
 }
 
 export const resolveBenchModuleUserPath = (parsed: ParsedBenchCli): string | undefined => {
   const fromEnv = Bun.env.BENCH_MODULE?.trim()
+
   if (fromEnv) return fromEnv
+
   if (parsed.moduleFlag?.trim()) return parsed.moduleFlag.trim()
   const first = parsed.positionals[0]?.trim()
+
   return first || undefined
 }
