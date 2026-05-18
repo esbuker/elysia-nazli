@@ -23,13 +23,15 @@ const report = {
   deflate: formatKb(deflate.length),
   rawBytes: source.length,
   gzipBytes: gzip.length,
-  deflateBytes: deflate.length
+  deflateBytes: deflate.length,
 }
 
 const badgeJson = new URL('../.github/bundle-size.json', import.meta.url)
+
 await Bun.write(badgeJson, `${JSON.stringify(report, null, 2)}\n`)
 
 const summaryPath = process.env.GITHUB_STEP_SUMMARY
+
 if (summaryPath) {
   const summaryFile = Bun.file(summaryPath)
   const previous = (await summaryFile.exists()) ? await summaryFile.text() : ''
@@ -41,8 +43,9 @@ if (summaryPath) {
     `| raw | ${report.raw} | ${report.rawBytes} |`,
     `| gzip | ${report.gzip} | ${report.gzipBytes} |`,
     `| deflate | ${report.deflate} | ${report.deflateBytes} |`,
-    ''
+    '',
   ].join('\n')
+
   await Bun.write(summaryFile, previous + md)
 }
 
