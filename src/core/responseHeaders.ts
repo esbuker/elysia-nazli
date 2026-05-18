@@ -5,14 +5,19 @@ import { SECOND } from './constants'
 export const resolveHeaderPolicy = ({
   activeRules,
   enableStandardHeaders,
-  enableLegacyHeaders
+  enableLegacyHeaders,
 }: {
   activeRules: CompiledRule[]
   enableStandardHeaders: boolean
   enableLegacyHeaders: boolean
 }) => {
-  const standardAllowed = shouldUseHeaderFamily(activeRules, 'standardHeaders', enableStandardHeaders)
+  const standardAllowed = shouldUseHeaderFamily(
+    activeRules,
+    'standardHeaders',
+    enableStandardHeaders,
+  )
   const legacyAllowed = shouldUseHeaderFamily(activeRules, 'legacyHeaders', enableLegacyHeaders)
+
   return { standardAllowed, legacyAllowed }
 }
 
@@ -21,7 +26,7 @@ export const setRateLimitHeaders = ({
   decision,
   resetSeconds,
   standardAllowed,
-  legacyAllowed
+  legacyAllowed,
 }: {
   headers: Record<string, string | number>
   decision: RateLimitDecision
@@ -46,14 +51,14 @@ export const defaultLimitedResponse = (retryAfterSeconds: number) => {
   return new Response(
     JSON.stringify({
       error: 'Too Many Requests',
-      retryAfter: retryAfterSeconds
+      retryAfter: retryAfterSeconds,
     }),
     {
       status: 429,
       headers: {
         'content-type': 'application/json',
-        'retry-after': String(retryAfterSeconds)
-      }
-    }
+        'retry-after': String(retryAfterSeconds),
+      },
+    },
   )
 }

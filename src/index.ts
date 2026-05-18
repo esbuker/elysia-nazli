@@ -3,51 +3,125 @@ import { compileRules } from './core/compileRules'
 import { DEFAULT_CLEANUP_INTERVAL, DEFAULT_NAMESPACE, SECOND } from './core/constants'
 import { evaluateDecisions } from './core/decisionEvaluator'
 import { createDefaultKeyGenerator } from './core/keyGenerator'
-import { resolveHeaderPolicy, setRateLimitHeaders, defaultLimitedResponse } from './core/responseHeaders'
+import {
+  defaultLimitedResponse,
+  resolveHeaderPolicy,
+  setRateLimitHeaders,
+} from './core/responseHeaders'
 import { getActiveRules } from './core/ruleMatcher'
 import { buildStore, ruleStoreCacheKey, type RuleStoreCacheKey } from './core/storeFactory'
 import { MemoryRateLimitStore, type MemoryStoreOptions } from './plugins/memoryStore'
-import { createBunRedisStore } from './plugins/redisStore'
-import { SqliteRateLimitStore } from './plugins/sqliteStore'
 import type {
+  CompiledRule,
+  MemoryStoreConfig,
   RateLimitDecision,
+  RateLimitHeaderOptions,
   RateLimitPluginOptions,
+  RateLimitRouteMacroConfig,
   RateLimitStore,
   RateLimitStoreConfig,
-  RuleMatchContext
+  RuleMatchContext,
 } from './types'
-import {
-  pickHeaderDecision,
-  upper
-} from './utilities'
+import { parseDuration, pickHeaderDecision, upper } from './utilities'
+
+let nextPluginSeed = 0
+
+const normalizeStandardHeaders = (
+  value: RateLimitHeaderOptions['standard'],
+): boolean | undefined => {
+  if (value === undefined) return undefined
+
+  if (typeof value === 'boolean') return value
+
+  if (value === 'draft-7') return true
+
+  throw new Error('rateLimit: headers.standard must be boolean or "draft-7"')
+}
+
+const resolvePluginHeaders = (options: RateLimitPluginOptions) => {
+  if (
+    options.headers !== undefined &&
+    (options.standardHeaders !== undefined || options.legacyHeaders !== undefined)
+  ) {
+    throw new Error(
+      'rateLimit: use either headers.{standard,legacy} or standardHeaders/legacyHeaders, not both',
+    )
+  }
+
+  if (!options.headers) {
+    return {
+      enableStandardHeaders: options.standardHeaders ?? true,
+      enableLegacyHeaders: options.legacyHeaders ?? false,
+    }
+  }
+
+  return {
+    enableStandardHeaders: normalizeStandardHeaders(options.headers.standard) ?? true,
+    enableLegacyHeaders: options.headers.legacy ?? false,
+  }
+}
+
+export const memoryStore = (options: MemoryStoreOptions | number = {}): MemoryStoreConfig => {
+  if (typeof options === 'number') {
+    return { type: 'memory', maxEntries: options }
+  }
+
+  return { type: 'memory', ...options }
+}
 
 export const rateLimit = (options: RateLimitPluginOptions = {}) => {
+  if (options.key && options.keyGenerator) {
+    throw new Error('rateLimit: use either key or keyGenerator, not both')
+  }
+
   const rules = compileRules(options)
   const namespace = options.namespace ?? DEFAULT_NAMESPACE
   const trustProxy = options.trustProxy ?? false
-  const keyGenerator = options.keyGenerator ?? createDefaultKeyGenerator({ trustProxy })
-  const enableStandardHeaders = options.standardHeaders ?? true
-  const enableLegacyHeaders = options.legacyHeaders ?? false
-  const cleanupIntervalMs = options.cleanupIntervalMs ?? DEFAULT_CLEANUP_INTERVAL
-  const pluginName = options.pluginName ?? 'elysia-nazli'
-  const onStoreError = options.onStoreError ?? 'allow'
-  const storeTimeoutMs = options.storeTimeoutMs
+  const fallbackKeyGenerator = createDefaultKeyGenerator({ trustProxy })
+  const keyGenerator =
+    options.keyGenerator ??
+    (async (ctx: Context, info: RuleMatchContext) => {
+      if (!options.key) {
+        return fallbackKeyGenerator(ctx)
+      }
 
-  if (!Number.isFinite(cleanupIntervalMs) || cleanupIntervalMs < 0) {
-    throw new Error('rateLimit: cleanupIntervalMs must be a finite, non-negative number')
+      const resolved = await options.key(ctx, info)
+
+      return resolved && resolved.trim().length > 0 ? resolved : 'unknown'
+    })
+  const { enableStandardHeaders, enableLegacyHeaders } = resolvePluginHeaders(options)
+  const cleanupInterval = parseDuration(
+    options.cleanupInterval ?? DEFAULT_CLEANUP_INTERVAL,
+    'cleanupInterval',
+  )
+  const pluginName = options.pluginName ?? 'elysia-nazli'
+  const pluginSeed = options.seed ?? ++nextPluginSeed
+  const onStoreError = options.onStoreError ?? 'allow'
+  const storeTimeout =
+    options.storeTimeout !== undefined
+      ? parseDuration(options.storeTimeout, 'storeTimeout')
+      : undefined
+
+  if (!Number.isFinite(cleanupInterval) || cleanupInterval < 0) {
+    throw new Error('rateLimit: cleanupInterval must be a finite, non-negative number')
   }
-  if (
-    storeTimeoutMs !== undefined &&
-    (!Number.isFinite(storeTimeoutMs) || storeTimeoutMs < 0)
-  ) {
-    throw new Error('rateLimit: storeTimeoutMs must be a finite, non-negative number when provided')
+
+  if (storeTimeout !== undefined && (!Number.isFinite(storeTimeout) || storeTimeout < 0)) {
+    throw new Error('rateLimit: storeTimeout must be a finite, non-negative number when provided')
   }
 
   const resolveFallbackStore = (): RateLimitStore | undefined => {
-    const fs = options.fallbackStore
-    if (fs === undefined || fs === false) return undefined
-    if (fs === true) return new MemoryRateLimitStore()
-    return buildStore(fs)
+    const fallbackStore = options.fallbackStore
+
+    if (fallbackStore === undefined || fallbackStore === false) {
+      return undefined
+    }
+
+    if (fallbackStore === true) {
+      return new MemoryRateLimitStore()
+    }
+
+    return buildStore(fallbackStore)
   }
 
   const fallbackRateLimitStore = resolveFallbackStore()
@@ -58,11 +132,10 @@ export const rateLimit = (options: RateLimitPluginOptions = {}) => {
 
   if (fallbackRateLimitStore) {
     activeStores.add(fallbackRateLimitStore)
-    if (typeof fallbackRateLimitStore.cleanup === 'function' && cleanupIntervalMs > 0) {
-      const timer = setInterval(
-        () => fallbackRateLimitStore.cleanup?.(Date.now()),
-        cleanupIntervalMs
-      )
+
+    if (typeof fallbackRateLimitStore.cleanup === 'function' && cleanupInterval > 0) {
+      const timer = setInterval(() => fallbackRateLimitStore.cleanup?.(Date.now()), cleanupInterval)
+
       cleanupTimers.set(fallbackRateLimitStore, timer)
     }
   }
@@ -70,14 +143,19 @@ export const rateLimit = (options: RateLimitPluginOptions = {}) => {
   const getStore = (storeConfig?: RateLimitStoreConfig) => {
     const cacheKey = ruleStoreCacheKey(storeConfig)
     const cached = storeCache.get(cacheKey)
-    if (cached) return cached
+
+    if (cached) {
+      return cached
+    }
 
     const nextStore = buildStore(storeConfig ?? options.store)
+
     storeCache.set(cacheKey, nextStore)
     activeStores.add(nextStore)
 
-    if (typeof nextStore.cleanup === 'function' && cleanupIntervalMs > 0) {
-      const timer = setInterval(() => nextStore.cleanup?.(Date.now()), cleanupIntervalMs)
+    if (typeof nextStore.cleanup === 'function' && cleanupInterval > 0) {
+      const timer = setInterval(() => nextStore.cleanup?.(Date.now()), cleanupInterval)
+
       cleanupTimers.set(nextStore, timer)
     }
 
@@ -85,8 +163,43 @@ export const rateLimit = (options: RateLimitPluginOptions = {}) => {
   }
 
   const ruleStores = new Map<string, RateLimitStore>()
+  const ensureAlgorithmSupport = (rule: CompiledRule, store: RateLimitStore, label: string) => {
+    if (rule.algorithm !== 'fixed-window' && typeof store.algorithmHit !== 'function') {
+      throw new Error(
+        `rateLimit: rule "${rule.id}" uses algorithm "${rule.algorithm}", but ${label} does not implement algorithmHit()`,
+      )
+    }
+  }
+
+  const compileRouteMacroRule = (routeRule: RateLimitRouteMacroConfig) => {
+    const explicitId = routeRule.id
+    const compiled = compileRules({
+      global: {
+        ...routeRule,
+        id: explicitId ?? 'route-macro',
+      },
+    })[0]!
+    const store = getStore(compiled.store)
+
+    ensureAlgorithmSupport(compiled, store, 'its store')
+
+    if (fallbackRateLimitStore) {
+      ensureAlgorithmSupport(compiled, fallbackRateLimitStore, 'fallbackStore')
+    }
+
+    return { compiled, explicitId, store }
+  }
+
   for (const rule of rules) {
-    ruleStores.set(rule.id, getStore(rule.store))
+    const store = getStore(rule.store)
+
+    ensureAlgorithmSupport(rule, store, 'its store')
+
+    if (fallbackRateLimitStore) {
+      ensureAlgorithmSupport(rule, fallbackRateLimitStore, 'fallbackStore')
+    }
+
+    ruleStores.set(rule.id, store)
   }
 
   const emitDecision = async (
@@ -94,104 +207,233 @@ export const rateLimit = (options: RateLimitPluginOptions = {}) => {
     decisions: RateLimitDecision[],
     blockedBy: RateLimitDecision | undefined,
     evaluatedAt: number,
-    storeLatencyMs: number
+    storeLatency: number,
   ) => {
-    if (!options.onDecision) return
+    if (!options.onDecision) {
+      return
+    }
+
     try {
-      await options.onDecision({ context, decisions, blockedBy, evaluatedAt, storeLatencyMs })
+      await options.onDecision({ context, decisions, blockedBy, evaluatedAt, storeLatency })
     } catch {
       // Observability must never break the request path.
     }
   }
 
-  return new Elysia({ name: pluginName })
-    .onRequest(async (ctx) => {
-      const ctxAsContext = ctx as Context
+  const deferredHeaders = new WeakMap<
+    Request,
+    {
+      decision: RateLimitDecision
+      resetSeconds: number
+      standardAllowed: boolean
+      legacyAllowed: boolean
+    }
+  >()
 
-      if (rules.length === 0) return
-      if (options.skip && (await options.skip(ctxAsContext))) return
+  const evaluateRequest = async ({
+    context,
+    method,
+    path,
+    activeRules,
+    stores,
+  }: {
+    context: Context
+    method: string
+    path: string
+    activeRules: CompiledRule[]
+    stores: Map<string, RateLimitStore>
+  }) => {
+    if (activeRules.length === 0) {
+      return
+    }
 
-      const method = upper(ctx.request.method)
-      const path = new URL(ctx.request.url).pathname
-      const info: RuleMatchContext = { method, path, request: ctx.request }
+    if (options.skip && (await options.skip(context))) {
+      return
+    }
 
-      const baseKey = await keyGenerator(ctxAsContext, info)
-      const now = Date.now()
-      const activeRules = getActiveRules(rules, method, path)
+    const info: RuleMatchContext = { method, path, request: context.request }
+    const baseKey = await keyGenerator(context, info)
+    const now = Date.now()
+    const { decisions, storeLatency } = await evaluateDecisions({
+      activeRules,
+      context,
+      namespace,
+      baseKey,
+      now,
+      ruleStores: stores,
+      storeTimeout,
+      onStoreError,
+      fallbackStore: fallbackRateLimitStore,
+    })
 
-      if (activeRules.length === 0) return
+    if (decisions.length === 0) {
+      await emitDecision(context, decisions, undefined, now, storeLatency)
 
-      const { decisions, storeLatencyMs } = await evaluateDecisions({
-        activeRules,
-        context: ctxAsContext,
-        namespace,
-        baseKey,
-        now,
-        ruleStores,
-        storeTimeoutMs,
-        onStoreError,
-        fallbackStore: fallbackRateLimitStore
-      })
+      return
+    }
 
-      if (decisions.length === 0) {
-        await emitDecision(ctxAsContext, decisions, undefined, now, storeLatencyMs)
-        return
-      }
+    const blockedBy = pickHeaderDecision(decisions.filter((d) => d.blocked))
+    const headerDecision = blockedBy ?? pickHeaderDecision(decisions)
 
-      const blockedBy = pickHeaderDecision(decisions.filter((d) => d.blocked))
-      const headerDecision = blockedBy ?? pickHeaderDecision(decisions)
-      if (!headerDecision) {
-        await emitDecision(ctxAsContext, decisions, undefined, now, storeLatencyMs)
-        return
-      }
+    if (!headerDecision) {
+      await emitDecision(context, decisions, undefined, now, storeLatency)
 
-      const { standardAllowed, legacyAllowed } = resolveHeaderPolicy({
-        activeRules,
-        enableStandardHeaders,
-        enableLegacyHeaders
-      })
-      const resetSeconds = Math.max(Math.ceil((headerDecision.resetAt - now) / SECOND), 0)
+      return
+    }
 
-      setRateLimitHeaders({
-        headers: ctx.set.headers,
+    const { standardAllowed, legacyAllowed } = resolveHeaderPolicy({
+      activeRules,
+      enableStandardHeaders,
+      enableLegacyHeaders,
+    })
+    const resetSeconds = Math.max(Math.ceil((headerDecision.resetAt - now) / SECOND), 0)
+
+    if (!blockedBy) {
+      deferredHeaders.set(context.request, {
         decision: headerDecision,
         resetSeconds,
         standardAllowed,
-        legacyAllowed
+        legacyAllowed,
       })
 
-      if (!blockedBy) {
-        await emitDecision(ctxAsContext, decisions, undefined, now, storeLatencyMs)
+      await emitDecision(context, decisions, undefined, now, storeLatency)
+
+      return
+    }
+
+    const retryAfterSeconds = Math.max(Math.ceil(blockedBy.retryAfter / SECOND), 1)
+
+    context.set.headers = { ...context.set.headers }
+
+    setRateLimitHeaders({
+      headers: context.set.headers,
+      decision: headerDecision,
+      resetSeconds,
+      standardAllowed,
+      legacyAllowed,
+    })
+
+    context.set.status = 429
+    context.set.headers['retry-after'] = String(retryAfterSeconds)
+
+    await emitDecision(context, decisions, blockedBy, now, storeLatency)
+
+    if (options.onLimit) {
+      const custom = await options.onLimit({
+        context,
+        decisions,
+        blockedBy,
+      })
+
+      if (custom) {
+        // Make sure rate-limit headers we already computed survive even if
+        // the user returned a fully formed Response.
+        for (const [name, value] of Object.entries(context.set.headers)) {
+          if (!custom.headers.has(name)) {
+            custom.headers.set(name, String(value))
+          }
+        }
+
+        return custom
+      }
+    }
+
+    return defaultLimitedResponse(retryAfterSeconds)
+  }
+
+  return new Elysia({ name: pluginName, seed: pluginSeed })
+    .macro({
+      rateLimit: (routeRule: RateLimitRouteMacroConfig) => {
+        if (!routeRule) {
+          return
+        }
+
+        const { compiled, explicitId, store } = compileRouteMacroRule(routeRule)
+
+        return {
+          seed: explicitId ?? routeRule,
+          beforeHandle: async (ctx) => {
+            const context = ctx as Context
+            const method = upper(context.request.method)
+            const path =
+              typeof context.path === 'string'
+                ? context.path
+                : new URL(context.request.url).pathname
+            const routePath = typeof context.route === 'string' ? context.route : path
+            const rule: CompiledRule = {
+              ...compiled,
+              id: explicitId ?? `route:${method} ${routePath}`,
+              type: 'route',
+              path: routePath,
+              method: method as CompiledRule['method'],
+              methodSet: new Set([method]),
+            }
+            const stores = new Map([[rule.id, store]])
+
+            const response = await evaluateRequest({
+              context,
+              method,
+              path,
+              activeRules: [rule],
+              stores,
+            })
+
+            if (response) {
+              return response
+            }
+          },
+        }
+      },
+    })
+    .onAfterHandle({ as: 'scoped' }, ({ request, set }) => {
+      const pending = deferredHeaders.get(request)
+
+      if (!pending) {
         return
       }
 
-      const retryAfterSeconds = Math.max(Math.ceil(blockedBy.retryAfterMs / SECOND), 1)
-      ctx.set.status = 429
-      ctx.set.headers['retry-after'] = String(retryAfterSeconds)
+      deferredHeaders.delete(request)
+      set.headers = { ...set.headers }
 
-      await emitDecision(ctxAsContext, decisions, blockedBy, now, storeLatencyMs)
+      setRateLimitHeaders({
+        headers: set.headers,
+        decision: pending.decision,
+        resetSeconds: pending.resetSeconds,
+        standardAllowed: pending.standardAllowed,
+        legacyAllowed: pending.legacyAllowed,
+      })
+    })
+    .onRequest(async (ctx) => {
+      const ctxAsContext = ctx as Context
 
-      if (options.onLimit) {
-        const custom = await options.onLimit({
-          context: ctxAsContext,
-          decisions,
-          blockedBy
-        })
-        if (custom) {
-          // Make sure rate-limit headers we already computed survive even if
-          // the user returned a fully formed Response.
-          for (const [name, value] of Object.entries(ctx.set.headers)) {
-            if (!custom.headers.has(name)) custom.headers.set(name, String(value))
-          }
-          return custom
-        }
+      if (rules.length === 0) {
+        return
       }
 
-      return defaultLimitedResponse(retryAfterSeconds)
+      const method = upper(ctx.request.method)
+      const path = new URL(ctx.request.url).pathname
+      const activeRules = getActiveRules(rules, method, path)
+
+      const response = await evaluateRequest({
+        context: ctxAsContext,
+        method,
+        path,
+        activeRules,
+        stores: ruleStores,
+      })
+
+      if (response) {
+        return response
+      }
     })
     .onStop(() => {
-      for (const timer of cleanupTimers.values()) clearInterval(timer)
-      for (const store of activeStores.values()) store.close?.()
+      for (const timer of cleanupTimers.values()) {
+        clearInterval(timer)
+      }
+
+      for (const store of activeStores.values()) {
+        store.close?.()
+      }
     })
 }
 
@@ -200,24 +442,37 @@ export type {
   BunRedisStoreOptions,
   CompiledRule,
   HitResult,
+  AlgorithmStoreHitInput,
   MemoryStoreConfig,
   OnDecisionContext,
   OnLimitContext,
   PrefixRule,
+  PrefixRuleMap,
+  RateLimitAlgorithm,
   RateLimitDecision,
+  RateLimitDuration,
+  RateLimitHeaderOptions,
+  RateLimitHttpMethod,
+  RateLimitKeyResolver,
   RateLimitPluginOptions,
+  RateLimitRouteMacroConfig,
+  RedisAdapterMode,
+  RedisClientLike,
   RateLimitStore,
   RateLimitStoreConfig,
   RouteRule,
+  RouteRuleMap,
   RuleConfig,
   RuleMatchContext,
   SqliteStoreConfig,
   StoreErrorContext,
   StoreErrorPolicy,
-  StoreHitInput
+  StoreHitInput,
 } from './types'
 export type { MemoryStoreOptions }
 
 export type { CreateDefaultKeyGeneratorOptions } from './core/keyGenerator'
+export type { IpResolverOptions } from './core/keyResolvers'
 
-export { createBunRedisStore, createDefaultKeyGenerator, MemoryRateLimitStore, SqliteRateLimitStore }
+export { createDefaultKeyGenerator, MemoryRateLimitStore }
+export { compose, custom, header, ip, user } from './core/keyResolvers'

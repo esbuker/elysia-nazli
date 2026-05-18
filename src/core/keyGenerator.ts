@@ -13,15 +13,19 @@ export interface CreateDefaultKeyGeneratorOptions {
 
 const headerClientKey = (ctx: Context): string | undefined => {
   const cf = ctx.request.headers.get('cf-connecting-ip')?.trim()
+
   if (cf) return cf
   const real = ctx.request.headers.get('x-real-ip')?.trim()
+
   if (real) return real
   const xff = firstForwardedIp(ctx.request.headers.get('x-forwarded-for'))
+
   return xff || undefined
 }
 
 const directSocketIp = (ctx: Context): string | undefined => {
   const ip = ctx.server?.requestIP?.(ctx.request)?.address?.trim()
+
   return ip && ip.length > 0 ? ip : undefined
 }
 
@@ -32,13 +36,17 @@ const directSocketIp = (ctx: Context): string | undefined => {
  */
 export const createDefaultKeyGenerator = (opts: CreateDefaultKeyGeneratorOptions = {}) => {
   const trustProxy = opts.trustProxy ?? false
+
   return (ctx: Context): string => {
     if (trustProxy) {
       const fromHeaders = headerClientKey(ctx)
+
       if (fromHeaders) return fromHeaders
     }
     const direct = directSocketIp(ctx)
+
     if (direct) return direct
+
     return 'unknown'
   }
 }
