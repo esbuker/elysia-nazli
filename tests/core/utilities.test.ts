@@ -1,19 +1,20 @@
 import { describe, expect, it } from 'bun:test'
 
+import { sanitizeTableName } from '../../src/core/sqliteTableName'
+import { toSafeNumber } from '../../src/core/toSafeNumber'
 import {
   ensureValidRule,
   firstForwardedIp,
   methodMatches,
   normalizeMethodSet,
   normalizePrefix,
+  parseDuration,
   pathMatches,
   pickHeaderDecision,
-  sanitizeTableName,
   shouldUseHeaderFamily,
-  toSafeNumber,
-  upper
-} from '../src/utilities'
-import type { CompiledRule, RateLimitDecision } from '../src/types'
+  upper,
+} from '../../src/utilities'
+import type { CompiledRule, RateLimitDecision } from '../../src/types'
 
 describe('upper', () => {
   it('uppercases ASCII methods', () => {
@@ -41,6 +42,7 @@ describe('firstForwardedIp', () => {
     // This is the contract `defaultKeyGenerator` relies on: the result must be
     // FALSY (not a usable IP) so the `||` chain advances to the next source.
     const result = firstForwardedIp('   ')
+
     expect(result).toBe('')
     expect(Boolean(result)).toBeFalse()
   })
@@ -58,6 +60,7 @@ describe('normalizeMethodSet', () => {
 
   it('returns a Set of one upper-cased method', () => {
     const set = normalizeMethodSet('post')!
+
     expect(set instanceof Set).toBeTrue()
     expect(set.has('POST')).toBeTrue()
     expect(set.size).toBe(1)
@@ -65,6 +68,7 @@ describe('normalizeMethodSet', () => {
 
   it('returns a Set of multiple upper-cased methods', () => {
     const set = normalizeMethodSet(['get', 'POST', 'patch'])!
+
     expect(set.has('GET')).toBeTrue()
     expect(set.has('POST')).toBeTrue()
     expect(set.has('PATCH')).toBeTrue()
@@ -116,37 +120,61 @@ describe('sanitizeTableName', () => {
   })
 })
 
+describe('parseDuration', () => {
+  it('passes numeric milliseconds through', () => {
+    expect(parseDuration(1500)).toBe(1500)
+  })
+
+  it('parses compact duration strings', () => {
+    expect(parseDuration('500ms')).toBe(500)
+    expect(parseDuration('30s')).toBe(30_000)
+    expect(parseDuration('15m')).toBe(15 * 60_000)
+    expect(parseDuration('2h')).toBe(2 * 60 * 60_000)
+    expect(parseDuration('1d')).toBe(24 * 60 * 60_000)
+  })
+
+  it('parses spaced and long-form duration strings', () => {
+    expect(parseDuration('1.5 minutes')).toBe(90_000)
+    expect(parseDuration('2 hours')).toBe(2 * 60 * 60_000)
+  })
+
+  it('rejects ambiguous duration strings', () => {
+    expect(() => parseDuration('60')).toThrow(/duration string/)
+    expect(() => parseDuration('1fortnight')).toThrow(/duration string/)
+  })
+})
+
 describe('ensureValidRule', () => {
   it('accepts well-formed rules', () => {
     expect(() =>
-      ensureValidRule('ok', { limit: 10, windowMs: 1000, cost: 2, banMs: 5000 })
+      ensureValidRule('ok', { limit: 10, window: 1000, cost: 2, ban: 5000 }),
     ).not.toThrow()
   })
 
   it('rejects non-positive or non-integer limit', () => {
-    expect(() => ensureValidRule('r', { limit: 0, windowMs: 1000 })).toThrow(/limit/)
-    expect(() => ensureValidRule('r', { limit: -1, windowMs: 1000 })).toThrow(/limit/)
-    expect(() => ensureValidRule('r', { limit: 1.5, windowMs: 1000 })).toThrow(/limit/)
-    expect(() => ensureValidRule('r', { limit: NaN, windowMs: 1000 })).toThrow(/limit/)
-    expect(() => ensureValidRule('r', { limit: Infinity, windowMs: 1000 })).toThrow(/limit/)
+    expect(() => ensureValidRule('r', { limit: 0, window: 1000 })).toThrow(/limit/)
+    expect(() => ensureValidRule('r', { limit: -1, window: 1000 })).toThrow(/limit/)
+    expect(() => ensureValidRule('r', { limit: 1.5, window: 1000 })).toThrow(/limit/)
+    expect(() => ensureValidRule('r', { limit: NaN, window: 1000 })).toThrow(/limit/)
+    expect(() => ensureValidRule('r', { limit: Infinity, window: 1000 })).toThrow(/limit/)
   })
 
-  it('rejects non-positive or non-finite windowMs', () => {
-    expect(() => ensureValidRule('r', { limit: 1, windowMs: 0 })).toThrow(/windowMs/)
-    expect(() => ensureValidRule('r', { limit: 1, windowMs: -1 })).toThrow(/windowMs/)
-    expect(() => ensureValidRule('r', { limit: 1, windowMs: NaN })).toThrow(/windowMs/)
+  it('rejects non-positive or non-finite window', () => {
+    expect(() => ensureValidRule('r', { limit: 1, window: 0 })).toThrow(/window/)
+    expect(() => ensureValidRule('r', { limit: 1, window: -1 })).toThrow(/window/)
+    expect(() => ensureValidRule('r', { limit: 1, window: NaN })).toThrow(/window/)
   })
 
   it('rejects bad cost only when cost is provided', () => {
-    expect(() => ensureValidRule('r', { limit: 1, windowMs: 1000, cost: 0 })).toThrow(/cost/)
-    expect(() => ensureValidRule('r', { limit: 1, windowMs: 1000, cost: 1.5 })).toThrow(/cost/)
-    expect(() => ensureValidRule('r', { limit: 1, windowMs: 1000, cost: -1 })).toThrow(/cost/)
-    expect(() => ensureValidRule('r', { limit: 1, windowMs: 1000 })).not.toThrow()
+    expect(() => ensureValidRule('r', { limit: 1, window: 1000, cost: 0 })).toThrow(/cost/)
+    expect(() => ensureValidRule('r', { limit: 1, window: 1000, cost: 1.5 })).toThrow(/cost/)
+    expect(() => ensureValidRule('r', { limit: 1, window: 1000, cost: -1 })).toThrow(/cost/)
+    expect(() => ensureValidRule('r', { limit: 1, window: 1000 })).not.toThrow()
   })
 
-  it('rejects negative banMs but allows zero', () => {
-    expect(() => ensureValidRule('r', { limit: 1, windowMs: 1000, banMs: -1 })).toThrow(/banMs/)
-    expect(() => ensureValidRule('r', { limit: 1, windowMs: 1000, banMs: 0 })).not.toThrow()
+  it('rejects negative ban but allows zero', () => {
+    expect(() => ensureValidRule('r', { limit: 1, window: 1000, ban: -1 })).toThrow(/ban/)
+    expect(() => ensureValidRule('r', { limit: 1, window: 1000, ban: 0 })).not.toThrow()
   })
 })
 
@@ -164,12 +192,14 @@ describe('pathMatches', () => {
 
   it('resets lastIndex on stateful regexes between calls (sticky)', () => {
     const re = /^\/users\/\d+$/y
+
     expect(pathMatches('/users/42', re)).toBeTrue()
     expect(pathMatches('/users/42', re)).toBeTrue()
   })
 
   it('resets lastIndex on global regexes between calls', () => {
     const re = /\/users\/\d+/g
+
     re.lastIndex = 999
     expect(pathMatches('/users/42', re)).toBeTrue()
   })
@@ -182,6 +212,7 @@ describe('methodMatches', () => {
 
   it('returns true only when method is in the set', () => {
     const set = new Set(['GET', 'POST'])
+
     expect(methodMatches('GET', set)).toBeTrue()
     expect(methodMatches('POST', set)).toBeTrue()
     expect(methodMatches('DELETE', set)).toBeFalse()
@@ -192,29 +223,37 @@ const compiled = (over: Partial<CompiledRule>): CompiledRule => ({
   id: over.id ?? 'r',
   type: over.type ?? 'global',
   limit: 1,
-  windowMs: 1000,
-  ...over
+  algorithm: 'fixed-window',
+  window: 1000,
+  ...over,
 })
 
 describe('shouldUseHeaderFamily', () => {
   it('uses fallback when no rule overrides', () => {
     const rules = [compiled({}), compiled({ id: 'r2' })]
+
     expect(shouldUseHeaderFamily(rules, 'standardHeaders', true)).toBeTrue()
     expect(shouldUseHeaderFamily(rules, 'standardHeaders', false)).toBeFalse()
   })
 
   it('explicit `true` on a rule wins regardless of fallback', () => {
     const rules = [compiled({ standardHeaders: true })]
+
     expect(shouldUseHeaderFamily(rules, 'standardHeaders', false)).toBeTrue()
   })
 
   it('explicit `false` on every rule disables headers', () => {
     const rules = [compiled({ standardHeaders: false })]
+
     expect(shouldUseHeaderFamily(rules, 'standardHeaders', true)).toBeFalse()
   })
 
-  it('a single `true` overrides another rule\'s `false` (true wins)', () => {
-    const rules = [compiled({ standardHeaders: false }), compiled({ id: 'r2', standardHeaders: true })]
+  it("a single `true` overrides another rule's `false` (true wins)", () => {
+    const rules = [
+      compiled({ standardHeaders: false }),
+      compiled({ id: 'r2', standardHeaders: true }),
+    ]
+
     expect(shouldUseHeaderFamily(rules, 'standardHeaders', false)).toBeTrue()
   })
 })
@@ -255,9 +294,9 @@ const decision = (over: Partial<RateLimitDecision> = {}): RateLimitDecision => (
   remaining: 5,
   count: 5,
   resetAt: 1_000,
-  retryAfterMs: 0,
+  retryAfter: 0,
   blocked: false,
-  ...over
+  ...over,
 })
 
 describe('pickHeaderDecision', () => {
@@ -267,6 +306,7 @@ describe('pickHeaderDecision', () => {
 
   it('returns the only decision when single', () => {
     const d = decision({ remaining: 7 })
+
     expect(pickHeaderDecision([d])?.remaining).toBe(7)
   })
 
@@ -274,18 +314,21 @@ describe('pickHeaderDecision', () => {
     const a = decision({ remaining: 3 })
     const b = decision({ remaining: 1, ruleId: 'b' })
     const c = decision({ remaining: 2, ruleId: 'c' })
+
     expect(pickHeaderDecision([a, b, c])).toBe(b)
   })
 
-  it('breaks ties by HIGHEST retryAfterMs', () => {
-    const a = decision({ remaining: 0, retryAfterMs: 1000, ruleId: 'a' })
-    const b = decision({ remaining: 0, retryAfterMs: 5000, ruleId: 'b' })
+  it('breaks ties by HIGHEST retryAfter', () => {
+    const a = decision({ remaining: 0, retryAfter: 1000, ruleId: 'a' })
+    const b = decision({ remaining: 0, retryAfter: 5000, ruleId: 'b' })
+
     expect(pickHeaderDecision([a, b])).toBe(b)
   })
 
   it('breaks tie-of-ties by smallest limit', () => {
-    const a = decision({ remaining: 0, retryAfterMs: 5000, limit: 100, ruleId: 'a' })
-    const b = decision({ remaining: 0, retryAfterMs: 5000, limit: 5, ruleId: 'b' })
+    const a = decision({ remaining: 0, retryAfter: 5000, limit: 100, ruleId: 'a' })
+    const b = decision({ remaining: 0, retryAfter: 5000, limit: 5, ruleId: 'b' })
+
     expect(pickHeaderDecision([a, b])).toBe(b)
   })
 
@@ -295,6 +338,7 @@ describe('pickHeaderDecision', () => {
     const c = decision({ remaining: 2, ruleId: 'c' })
     const arr = [a, b, c]
     const snapshot = arr.slice()
+
     pickHeaderDecision(arr)
     expect(arr).toEqual(snapshot)
   })
@@ -304,7 +348,7 @@ describe('pickHeaderDecision', () => {
     const aFrozen = Object.freeze({ ...a })
     const b = decision({ remaining: 1, ruleId: 'b' })
     const bFrozen = Object.freeze({ ...b })
-    // If pickHeaderDecision tried to mutate, the frozen objects would throw in strict mode.
+
     expect(() => pickHeaderDecision([aFrozen, bFrozen])).not.toThrow()
   })
 })

@@ -3,16 +3,17 @@ import { describe, expect, it } from 'bun:test'
 import {
   defaultLimitedResponse,
   resolveHeaderPolicy,
-  setRateLimitHeaders
-} from '../src/core/responseHeaders'
-import type { CompiledRule, RateLimitDecision } from '../src/types'
+  setRateLimitHeaders,
+} from '../../src/core/responseHeaders'
+import type { CompiledRule, RateLimitDecision } from '../../src/types'
 
 const rule = (over: Partial<CompiledRule> = {}): CompiledRule => ({
   id: 'r',
   type: 'global',
   limit: 1,
-  windowMs: 1000,
-  ...over
+  algorithm: 'fixed-window',
+  window: 1000,
+  ...over,
 })
 
 const decision = (over: Partial<RateLimitDecision> = {}): RateLimitDecision => ({
@@ -22,15 +23,19 @@ const decision = (over: Partial<RateLimitDecision> = {}): RateLimitDecision => (
   remaining: 42,
   count: 58,
   resetAt: 1_700_000_000_000,
-  retryAfterMs: 0,
+  retryAfter: 0,
   blocked: false,
-  ...over
+  ...over,
 })
 
 describe('resolveHeaderPolicy', () => {
   it('respects defaults from plugin options when no rule overrides exist', () => {
     expect(
-      resolveHeaderPolicy({ activeRules: [rule()], enableStandardHeaders: true, enableLegacyHeaders: false })
+      resolveHeaderPolicy({
+        activeRules: [rule()],
+        enableStandardHeaders: true,
+        enableLegacyHeaders: false,
+      }),
     ).toEqual({ standardAllowed: true, legacyAllowed: false })
   })
 
@@ -39,8 +44,8 @@ describe('resolveHeaderPolicy', () => {
       resolveHeaderPolicy({
         activeRules: [rule({ legacyHeaders: true })],
         enableStandardHeaders: false,
-        enableLegacyHeaders: false
-      })
+        enableLegacyHeaders: false,
+      }),
     ).toEqual({ standardAllowed: false, legacyAllowed: true })
   })
 
@@ -49,8 +54,8 @@ describe('resolveHeaderPolicy', () => {
       resolveHeaderPolicy({
         activeRules: [rule({ standardHeaders: false })],
         enableStandardHeaders: true,
-        enableLegacyHeaders: false
-      })
+        enableLegacyHeaders: false,
+      }),
     ).toEqual({ standardAllowed: false, legacyAllowed: false })
   })
 })
@@ -58,12 +63,13 @@ describe('resolveHeaderPolicy', () => {
 describe('setRateLimitHeaders', () => {
   it('writes standard headers only when allowed', () => {
     const headers: Record<string, string | number> = {}
+
     setRateLimitHeaders({
       headers,
       decision: decision(),
       resetSeconds: 5,
       standardAllowed: true,
-      legacyAllowed: false
+      legacyAllowed: false,
     })
     expect(headers['ratelimit-limit']).toBe('100')
     expect(headers['ratelimit-remaining']).toBe('42')
@@ -74,12 +80,13 @@ describe('setRateLimitHeaders', () => {
   it('writes legacy headers only when allowed (using epoch seconds for reset)', () => {
     const headers: Record<string, string | number> = {}
     const now = 1_700_000_000_000
+
     setRateLimitHeaders({
       headers,
       decision: decision({ resetAt: now }),
       resetSeconds: 5,
       standardAllowed: false,
-      legacyAllowed: true
+      legacyAllowed: true,
     })
     expect(headers['x-ratelimit-limit']).toBe('100')
     expect(headers['x-ratelimit-reset']).toBe(String(Math.floor(now / 1000)))
@@ -88,12 +95,13 @@ describe('setRateLimitHeaders', () => {
 
   it('writes both families when both allowed', () => {
     const headers: Record<string, string | number> = {}
+
     setRateLimitHeaders({
       headers,
       decision: decision(),
       resetSeconds: 5,
       standardAllowed: true,
-      legacyAllowed: true
+      legacyAllowed: true,
     })
     expect(headers['ratelimit-limit']).toBe('100')
     expect(headers['x-ratelimit-limit']).toBe('100')
@@ -101,12 +109,13 @@ describe('setRateLimitHeaders', () => {
 
   it('writes nothing when neither allowed', () => {
     const headers: Record<string, string | number> = {}
+
     setRateLimitHeaders({
       headers,
       decision: decision(),
       resetSeconds: 5,
       standardAllowed: false,
-      legacyAllowed: false
+      legacyAllowed: false,
     })
     expect(Object.keys(headers).length).toBe(0)
   })
@@ -115,6 +124,7 @@ describe('setRateLimitHeaders', () => {
 describe('defaultLimitedResponse', () => {
   it('returns a 429 JSON response with retry-after header', async () => {
     const res = defaultLimitedResponse(42)
+
     expect(res.status).toBe(429)
     expect(res.headers.get('content-type')).toBe('application/json')
     expect(res.headers.get('retry-after')).toBe('42')

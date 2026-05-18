@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'bun:test'
 import { RedisClient } from 'bun'
 
-import { createBunRedisStore } from '../src/plugins/redisStore'
-import type { BunRedisClientLike } from '../src/types'
+import { createBunRedisStore } from '../../src/plugins/redisStore'
+import type { BunRedisClientLike } from '../../src/types'
 
 type Backend = {
   name: string
@@ -21,7 +21,7 @@ const REDIS_CLIENT_OPTIONS = {
   autoReconnect: false,
   connectionTimeout: 500,
   enableOfflineQueue: false,
-  maxRetries: 0
+  maxRetries: 0,
 }
 
 const BACKENDS: Backend[] = [
@@ -29,14 +29,14 @@ const BACKENDS: Backend[] = [
     name: 'Redis',
     envVar: 'REDIS_URL',
     product: 'redis',
-    defaultUris: ['redis://localhost:6379', 'redis://localhost:6380']
+    defaultUris: ['redis://localhost:6379', 'redis://localhost:6380'],
   },
   {
     name: 'KeyDB',
     envVar: 'KEYDB_URL',
     product: 'keydb',
-    defaultUris: ['redis://localhost:6380', 'redis://localhost:6379']
-  }
+    defaultUris: ['redis://localhost:6380', 'redis://localhost:6379'],
+  },
 ]
 
 const uniquePrefix = (backend: Backend, name: string) =>
@@ -52,11 +52,13 @@ const probeBackend = async (backend: Backend): Promise<ProbedBackend> => {
 
   for (const uri of uris) {
     const client = new RedisClient(uri, REDIS_CLIENT_OPTIONS)
+
     try {
       await client.connect()
       await client.ping()
       const info = String(await client.send('INFO', ['server']))
       const product = detectProduct(info)
+
       if (product === backend.product) {
         return { ...backend, uri, available: true }
       }
@@ -75,16 +77,19 @@ const withStore = async (
   backend: ProbedBackend,
   prefixName: string,
   options: { disableAtomicScript?: boolean },
-  run: (store: ReturnType<typeof createBunRedisStore>) => Promise<void>
+  run: (store: ReturnType<typeof createBunRedisStore>) => Promise<void>,
 ) => {
   const client = new RedisClient(backend.uri, REDIS_CLIENT_OPTIONS)
+
   await client.connect()
+
   try {
     const store = createBunRedisStore({
       client: client as BunRedisClientLike,
       prefix: uniquePrefix(backend, prefixName),
-      ...options
+      ...options,
     })
+
     await run(store)
   } finally {
     client.close()
@@ -100,6 +105,7 @@ for (const backend of probedBackends) {
         expect(true).toBeTrue()
       })
     })
+
     continue
   }
 
@@ -109,10 +115,11 @@ for (const backend of probedBackends) {
         const r = await store.hit({
           key: 'mc:1',
           limit: 5,
-          windowMs: 60_000,
+          window: 60_000,
           cost: 1,
-          now: Date.now()
+          now: Date.now(),
         })
+
         expect(r.count).toBe(1)
         expect(r.remaining).toBe(4)
         expect(r.blocked).toBeFalse()
@@ -121,15 +128,16 @@ for (const backend of probedBackends) {
 
     it('blocks when limit exceeded', async () => {
       await withStore(backend, 'multi-block', { disableAtomicScript: true }, async (store) => {
-        await store.hit({ key: 'mc:2', limit: 2, windowMs: 60_000, cost: 1, now: Date.now() })
-        await store.hit({ key: 'mc:2', limit: 2, windowMs: 60_000, cost: 1, now: Date.now() })
+        await store.hit({ key: 'mc:2', limit: 2, window: 60_000, cost: 1, now: Date.now() })
+        await store.hit({ key: 'mc:2', limit: 2, window: 60_000, cost: 1, now: Date.now() })
         const r = await store.hit({
           key: 'mc:2',
           limit: 2,
-          windowMs: 60_000,
+          window: 60_000,
           cost: 1,
-          now: Date.now()
+          now: Date.now(),
         })
+
         expect(r.blocked).toBeTrue()
         expect(r.remaining).toBe(0)
       })
@@ -140,10 +148,11 @@ for (const backend of probedBackends) {
         const r = await store.hit({
           key: 'mc:3',
           limit: 10,
-          windowMs: 60_000,
+          window: 60_000,
           cost: 3,
-          now: Date.now()
+          now: Date.now(),
         })
+
         expect(r.count).toBe(3)
       })
     })
@@ -151,25 +160,28 @@ for (const backend of probedBackends) {
     it('arms ban when count exceeds limit', async () => {
       await withStore(backend, 'multi-ban', { disableAtomicScript: true }, async (store) => {
         const now = Date.now()
-        await store.hit({ key: 'mc:4', limit: 1, windowMs: 10_000, cost: 1, banMs: 5_000, now })
+
+        await store.hit({ key: 'mc:4', limit: 1, window: 10_000, cost: 1, ban: 5_000, now })
         const r = await store.hit({
           key: 'mc:4',
           limit: 1,
-          windowMs: 10_000,
+          window: 10_000,
           cost: 1,
-          banMs: 5_000,
-          now
+          ban: 5_000,
+          now,
         })
+
         expect(r.blocked).toBeTrue()
         expect(r.banUntil).toBeGreaterThan(now)
-        expect(r.retryAfterMs).toBeGreaterThan(0)
+        expect(r.retryAfter).toBeGreaterThan(0)
       })
     })
 
     it('reports resetAt with remaining TTL', async () => {
       await withStore(backend, 'multi-ttl', { disableAtomicScript: true }, async (store) => {
         const now = Date.now()
-        const r = await store.hit({ key: 'mc:5', limit: 10, windowMs: 120_000, cost: 1, now })
+        const r = await store.hit({ key: 'mc:5', limit: 10, window: 120_000, cost: 1, now })
+
         expect(r.resetAt).toBeGreaterThan(now)
         expect(r.resetAt).toBeLessThanOrEqual(now + 120_000)
       })
@@ -182,10 +194,11 @@ for (const backend of probedBackends) {
         const r = await store.hit({
           key: 'at:1',
           limit: 5,
-          windowMs: 60_000,
+          window: 60_000,
           cost: 1,
-          now: Date.now()
+          now: Date.now(),
         })
+
         expect(r.count).toBe(1)
         expect(r.remaining).toBe(4)
         expect(r.blocked).toBeFalse()
@@ -194,15 +207,16 @@ for (const backend of probedBackends) {
 
     it('blocks when limit exceeded', async () => {
       await withStore(backend, 'atomic-block', {}, async (store) => {
-        await store.hit({ key: 'at:2', limit: 2, windowMs: 60_000, cost: 1, now: Date.now() })
-        await store.hit({ key: 'at:2', limit: 2, windowMs: 60_000, cost: 1, now: Date.now() })
+        await store.hit({ key: 'at:2', limit: 2, window: 60_000, cost: 1, now: Date.now() })
+        await store.hit({ key: 'at:2', limit: 2, window: 60_000, cost: 1, now: Date.now() })
         const r = await store.hit({
           key: 'at:2',
           limit: 2,
-          windowMs: 60_000,
+          window: 60_000,
           cost: 1,
-          now: Date.now()
+          now: Date.now(),
         })
+
         expect(r.blocked).toBeTrue()
         expect(r.remaining).toBe(0)
       })
@@ -211,15 +225,17 @@ for (const backend of probedBackends) {
     it('arms ban in atomic script', async () => {
       await withStore(backend, 'atomic-ban', {}, async (store) => {
         const now = Date.now()
-        await store.hit({ key: 'at:3', limit: 1, windowMs: 10_000, cost: 1, banMs: 5_000, now })
+
+        await store.hit({ key: 'at:3', limit: 1, window: 10_000, cost: 1, ban: 5_000, now })
         const r = await store.hit({
           key: 'at:3',
           limit: 1,
-          windowMs: 10_000,
+          window: 10_000,
           cost: 1,
-          banMs: 5_000,
-          now
+          ban: 5_000,
+          now,
         })
+
         expect(r.blocked).toBeTrue()
         expect(r.banUntil).toBeGreaterThan(now)
       })
@@ -228,8 +244,10 @@ for (const backend of probedBackends) {
     it('preserves TTL on mid-window hits', async () => {
       await withStore(backend, 'atomic-no-drift', {}, async (store) => {
         const now = Date.now()
-        await store.hit({ key: 'at:4', limit: 10, windowMs: 120_000, cost: 1, now })
-        const r = await store.hit({ key: 'at:4', limit: 10, windowMs: 120_000, cost: 1, now })
+
+        await store.hit({ key: 'at:4', limit: 10, window: 120_000, cost: 1, now })
+        const r = await store.hit({ key: 'at:4', limit: 10, window: 120_000, cost: 1, now })
+
         expect(r.count).toBe(2)
         expect(r.resetAt).toBeLessThanOrEqual(now + 120_000)
       })
@@ -240,17 +258,17 @@ for (const backend of probedBackends) {
     it('works end-to-end with Redis-backed storage', async () => {
       await withStore(backend, 'plugin', {}, async (store) => {
         const { Elysia } = await import('elysia')
-        const { rateLimit } = await import('../src/index')
+        const { rateLimit } = await import('../../src/index')
 
         const app = new Elysia()
           .use(
             rateLimit({
               namespace: `${backend.name.toLowerCase()}-e2e`,
-              global: { id: 'g', limit: 3, windowMs: 60_000 },
+              global: { id: 'g', limit: 3, window: 60_000 },
               store,
-              cleanupIntervalMs: 0,
-              keyGenerator: () => 'k'
-            })
+              cleanupInterval: 0,
+              keyGenerator: () => 'k',
+            }),
           )
           .get('/x', () => 'ok')
 
