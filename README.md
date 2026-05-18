@@ -3,13 +3,15 @@
 [![CI](https://github.com/esbuker/elysia-nazli/actions/workflows/ci.yml/badge.svg)](https://github.com/esbuker/elysia-nazli/actions/workflows/ci.yml)
 [![Bundle size (gzip)](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fesbuker%2Felysia-nazli%2Fmaster%2F.github%2Fbundle-size.json&query=%24.gzip&label=bundle%20%28gzip%29&logo=github)](https://github.com/esbuker/elysia-nazli/blob/master/.github/bundle-size.json)
 
-Production-friendly rate limiting for [Elysia](https://elysiajs.com) on [Bun](https://bun.sh).
+Tiny, graceful rate limiting for [Elysia](https://elysiajs.com) apps running on [Bun](https://bun.sh).
 
-`elysia-nazli` gives you a small default setup, route-aware limits when one global quota is not enough, and advanced stores or algorithms when your API grows into them.
+`elysia-nazli` starts simple: add one limit, protect your routes, and move on. When your API needs more care, it grows with you through route rules, composed keys, shared stores, and smoother algorithms.
 
-> **Nazlı** means delicate and graceful in Turkish, but also a little hard to please.
+Built for real services where a single global limit just doesn’t cut it.
+
+> **Nazlı** means “delicate” and “graceful” in Turkish, with just enough fussiness to keep traffic in line.
 >
-> Polite API, firm limits.
+> Polite API. Firm limits.
 
 ## Contents
 
