@@ -132,7 +132,12 @@ export type RedisAdapterMode = 'auto' | 'bun' | 'ioredis' | 'node-redis' | 'cust
 
 export interface RedisClientLike {
   get?(key: string): MaybePromise<string | number | bigint | null | undefined>
-  set?(key: string, value: string, mode?: string, milliseconds?: number): MaybePromise<unknown>
+  set?(
+    key: string,
+    value: string,
+    mode?: string | { PX?: number; px?: number },
+    milliseconds?: number,
+  ): MaybePromise<unknown>
   incrby?(key: string, value: number): MaybePromise<number | string | bigint>
   incrBy?(key: string, value: number): MaybePromise<number | string | bigint>
   incr?(key: string): MaybePromise<number | string | bigint>
@@ -155,9 +160,7 @@ export interface RedisClientLike {
   sendCommand?(args: string[]): MaybePromise<unknown>
 }
 
-export type BunRedisClientLike = RedisClientLike
-
-export interface BunRedisStoreOptions {
+export interface RedisStoreOptions {
   client?: RedisClientLike
   prefix?: string
   adapter?: RedisAdapterMode

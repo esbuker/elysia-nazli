@@ -119,7 +119,7 @@ Redis is the recommended built-in store for horizontally scaled services.
 ```ts
 import { RedisClient } from 'bun'
 import { rateLimit } from 'elysia-nazli'
-import { redisStore } from 'elysia-nazli/redis'
+import { createRedisStore, redisStore } from 'elysia-nazli/redis'
 
 const redis = new RedisClient('redis://localhost:6379')
 
@@ -140,6 +140,11 @@ rateLimit({
 })
 ```
 
+`redisStore(...)` is the ergonomic helper. `createRedisStore(...)` is the same
+portable factory with a more explicit name. The older `createBunRedisStore(...)`
+export still exists as a backward-compatible alias, but new code should prefer
+`redisStore(...)` or `createRedisStore(...)`.
+
 Adapter mode is inferred when possible. Set it explicitly when structural detection is ambiguous:
 
 ```ts
@@ -147,6 +152,27 @@ redisStore({ client, adapter: 'bun' })
 redisStore({ client, adapter: 'ioredis' })
 redisStore({ client, adapter: 'node-redis' })
 redisStore({ client, adapter: 'custom' })
+```
+
+Node Redis example:
+
+```ts
+import { createClient } from 'redis'
+import { rateLimit } from 'elysia-nazli'
+import { redisStore } from 'elysia-nazli/redis'
+
+const client = createClient({ url: process.env.REDIS_URL })
+await client.connect()
+
+rateLimit({
+  store: redisStore({
+    client,
+    adapter: 'node-redis',
+    prefix: 'myapp',
+  }),
+  limit: 120,
+  window: '1m',
+})
 ```
 
 Redis options:

@@ -4,11 +4,11 @@ import { evaluateAlgorithmHit, type StoredAlgorithmState } from '../core/algorit
 import { toSafeNumber } from '../core/toSafeNumber'
 import type {
   AlgorithmStoreHitInput,
-  BunRedisClientLike,
-  BunRedisStoreOptions,
   HitResult,
-  RedisAdapterMode,
   RateLimitStore,
+  RedisAdapterMode,
+  RedisClientLike,
+  RedisStoreOptions,
   StoreHitInput,
 } from '../types'
 
@@ -129,7 +129,7 @@ return { 0, remaining, reset, 0, 0, limit - remaining }
 const isFunction = (value: unknown): value is (...args: unknown[]) => unknown =>
   typeof value === 'function'
 
-const detectAdapter = (client: BunRedisClientLike): RedisAdapterMode => {
+const detectAdapter = (client: RedisClientLike): RedisAdapterMode => {
   if (isFunction(client.sendCommand) || isFunction(client.incrBy) || isFunction(client.pSetEx)) {
     return 'node-redis'
   }
@@ -146,7 +146,7 @@ const detectAdapter = (client: BunRedisClientLike): RedisAdapterMode => {
 }
 
 const normalizeRedisClient = (
-  client: BunRedisClientLike,
+  client: RedisClientLike,
   adapter: RedisAdapterMode,
 ): NormalizedRedisClient => {
   const mode = adapter === 'auto' ? detectAdapter(client) : adapter
@@ -309,12 +309,12 @@ const parseGcraResult = (
   }
 }
 
-export const createBunRedisStore = (options: BunRedisStoreOptions = {}): RateLimitStore => {
+export const createRedisStore = (options: RedisStoreOptions = {}): RateLimitStore => {
   // Bun's built-in `RedisClient` does not yet expose `eval`/`send` in its
   // public TypeScript surface, but those methods exist (or can be polyfilled
   // by the user). Treat the client structurally — if `eval` or `send` is
   // present at runtime we use the atomic path, otherwise we fall back.
-  const rawClient = (options.client ?? bunRedis) as BunRedisClientLike
+  const rawClient = (options.client ?? bunRedis) as RedisClientLike
   const client = normalizeRedisClient(rawClient, options.adapter ?? 'auto')
   const prefix = options.prefix ?? 'nazli'
   const atomicSupported = !options.disableAtomicScript && typeof client.evalScript === 'function'
@@ -540,3 +540,7 @@ export const createBunRedisStore = (options: BunRedisStoreOptions = {}): RateLim
     algorithmHit: hitAlgorithm,
   }
 }
+
+/** @deprecated Use createRedisStore instead. */
+export const createBunRedisStore = (options: RedisStoreOptions = {}): RateLimitStore =>
+  createRedisStore(options)

@@ -1,9 +1,28 @@
 import { describe, expect, it } from 'bun:test'
 
-import { redisStore } from '../../src/redis'
+import { createRedisStore, redisStore } from '../../src/redis'
 import type { RedisClientLike } from '../../src/types'
 
 describe('redisStore adapter portability', () => {
+  it('exposes a portable createRedisStore factory', async () => {
+    const client: RedisClientLike = {
+      incrBy: async () => 1,
+      pExpire: async () => 1,
+      pTTL: async () => 1000,
+      pSetEx: async () => 'OK',
+      get: async () => null,
+    }
+    const store = createRedisStore({
+      client,
+      adapter: 'node-redis',
+      disableAtomicScript: true,
+    })
+
+    const result = await store.hit({ key: 'k', limit: 2, window: 1000, cost: 1, now: 1_000 })
+
+    expect(result.count).toBe(1)
+  })
+
   it('supports node-redis-style camelCase commands', async () => {
     const counters = new Map<string, number>()
     const ttls = new Map<string, number>()

@@ -1,7 +1,7 @@
-import { createBunRedisStore } from './plugins/redisStore'
-import type { BunRedisClientLike, BunRedisStoreOptions, RateLimitStore } from './types'
+import { createRedisStore } from './plugins/redisStore'
+import type { RedisClientLike, RedisStoreOptions, RateLimitStore } from './types'
 
-const isRedisClient = (value: unknown): value is BunRedisClientLike => {
+const isRedisClient = (value: unknown): value is RedisClientLike => {
   if (typeof value !== 'object' || value === null) {
     return false
   }
@@ -24,20 +24,15 @@ const isRedisClient = (value: unknown): value is BunRedisClientLike => {
 }
 
 export const redisStore = (
-  clientOrOptions: BunRedisClientLike | BunRedisStoreOptions = {},
+  clientOrOptions: RedisClientLike | RedisStoreOptions = {},
 ): RateLimitStore => {
   if (isRedisClient(clientOrOptions)) {
-    return createBunRedisStore({ client: clientOrOptions })
+    return createRedisStore({ client: clientOrOptions })
   }
 
-  return createBunRedisStore(clientOrOptions)
+  return createRedisStore(clientOrOptions)
 }
 
-export { createBunRedisStore }
+export { createBunRedisStore, createRedisStore } from './plugins/redisStore'
 
-export type {
-  BunRedisClientLike,
-  BunRedisStoreOptions,
-  RedisAdapterMode,
-  RedisClientLike,
-} from './types'
+export type { RedisAdapterMode, RedisClientLike, RedisStoreOptions } from './types'

@@ -458,6 +458,7 @@ export type {
   RateLimitRouteMacroConfig,
   RedisAdapterMode,
   RedisClientLike,
+  RedisStoreOptions,
   RateLimitStore,
   RateLimitStoreConfig,
   RouteRule,
