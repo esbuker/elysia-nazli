@@ -1,6 +1,6 @@
 {
   "name": "elysia-nazli",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "description": "Production-friendly, store-pluggable rate limiting plugin for Elysia on Bun.",
   "license": "MIT",
   "author": "Enes Büker (https://github.com/esbuker)",
