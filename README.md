@@ -7,11 +7,11 @@ Tiny, graceful rate limiting for [Elysia](https://elysiajs.com) apps running on 
 
 `elysia-nazli` starts simple: add one limit, protect your routes, and move on. When your API needs more care, it grows with you through route rules, composed keys, shared stores, and smoother algorithms.
 
-Built for real services where a single global limit just doesn’t cut it.
-
 > **Nazlı** means “delicate” and “graceful” in Turkish, with just enough fussiness to keep traffic in line.
 >
 > Polite API. Firm limits.
+
+Built for real services where a single global limit just doesn’t cut it.
 
 ## Contents
 
@@ -128,13 +128,15 @@ The `/login` route must pass both the global rule and the route rule.
 import { Elysia } from 'elysia'
 import { rateLimit } from 'elysia-nazli'
 
-const app = new Elysia().use(rateLimit()).post('/login', () => 'ok', {
-  rateLimit: {
-    limit: 10,
-    window: '15m',
-    ban: '5m',
-  },
-})
+const app = new Elysia()
+  .use(rateLimit())
+  .post('/login', () => 'ok', {
+    rateLimit: {
+      limit: 10,
+      window: '15m',
+      ban: '5m',
+    },
+  })
 ```
 
 Use route options when local readability matters. Use plugin-level `routes` when you want early `onRequest` limiting, object maps, `RegExp` paths, or several matching rules evaluated together.
