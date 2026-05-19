@@ -1,6 +1,6 @@
 import type { Context } from 'elysia'
 
-type MaybePromise<T> = T | Promise<T>
+export type MaybePromise<T> = T | Promise<T>
 
 type HttpMethod =
   | 'GET'
@@ -86,6 +86,7 @@ export interface RuleConfig {
    */
   ban?: RateLimitDuration
   store?: RateLimitStoreConfig
+  key?: RateLimitKeyResolver
   method?: RateLimitHttpMethod | RateLimitHttpMethod[]
   skip?: (ctx: Context) => MaybePromise<boolean>
   standardHeaders?: boolean
@@ -171,6 +172,12 @@ export interface RedisStoreOptions {
    */
   disableAtomicScript?: boolean
 }
+
+/** @deprecated Use `RedisClientLike` instead. */
+export type BunRedisClientLike = RedisClientLike
+
+/** @deprecated Use `RedisStoreOptions` instead. */
+export type BunRedisStoreOptions = RedisStoreOptions
 
 export interface RateLimitDecision {
   ruleId: string

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import { Elysia } from 'elysia'
 
-import { MemoryRateLimitStore, rateLimit } from '../../src/index'
+import { bodyField, MemoryRateLimitStore, rateLimit } from '../../src/index'
 import { redisStore } from '../../src/redis'
 import { sqliteStore } from '../../src/sqlite'
 import type { BunRedisClientLike, HitResult, RateLimitStore, StoreHitInput } from '../../src/index'
@@ -351,6 +351,42 @@ describe('rateLimit plugin package behavior', () => {
     expect(routeHits[0]?.key).toContain('auth-special')
     expect(defaultHits.some((hit) => hit.key.includes('global'))).toBeTrue()
     expect(defaultHits.some((hit) => hit.key.includes('auth-special'))).toBeFalse()
+  })
+
+  it('supports per-rule key overrides', async () => {
+    const hits: StoreHitInput[] = []
+    const store = createTrackingStore(hits)
+
+    const app = new Elysia()
+      .use(
+        rateLimit({
+          namespace: 'nazli-rule-key',
+          store,
+          global: { id: 'global', limit: 50, window: 60_000 },
+          routes: {
+            'POST /auth/login': {
+              id: 'auth-login',
+              limit: 5,
+              window: 60_000,
+              key: bodyField('email', { normalize: 'email' }),
+            },
+          },
+          keyGenerator: () => 'plugin-key',
+        }),
+      )
+      .post('/auth/login', () => 'ok')
+
+    await app.handle(
+      new Request('http://localhost/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ email: 'User@Example.com' }),
+      }),
+    )
+
+    expect(hits.map((hit) => hit.key)).toContain('nazli-rule-key:global:plugin-key')
+    expect(hits.map((hit) => hit.key)).toContain(
+      'nazli-rule-key:auth-login:body:email:user@example.com',
+    )
   })
 
   it('supports async external stores (redis-like adapters)', async () => {

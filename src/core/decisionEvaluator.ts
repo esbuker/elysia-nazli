@@ -4,6 +4,7 @@ import type {
   AlgorithmStoreHitInput,
   CompiledRule,
   HitResult,
+  MaybePromise,
   RateLimitDecision,
   RateLimitStore,
   StoreErrorPolicy,
@@ -88,6 +89,16 @@ export interface EvaluateDecisionsResult {
   storeLatency: number
 }
 
+const normalizeBaseKey = (value: unknown): string => {
+  if (typeof value !== 'string') {
+    return 'unknown'
+  }
+
+  const trimmed = value.trim()
+
+  return trimmed.length > 0 ? trimmed : 'unknown'
+}
+
 const callStore = async (
   store: RateLimitStore,
   input: StoreHitInput,
@@ -121,6 +132,7 @@ export const evaluateDecisions = async ({
   context,
   namespace,
   baseKey,
+  resolveRuleKey,
   now,
   ruleStores,
   storeTimeout,
@@ -130,7 +142,8 @@ export const evaluateDecisions = async ({
   activeRules: CompiledRule[]
   context: Context
   namespace: string
-  baseKey: string
+  baseKey?: string
+  resolveRuleKey?: (rule: CompiledRule) => MaybePromise<string | null | undefined>
   now: number
   ruleStores: Map<string, RateLimitStore>
   storeTimeout?: number
@@ -155,7 +168,8 @@ export const evaluateDecisions = async ({
       }
     }
 
-    const key = `${namespace}:${rule.id}:${baseKey}`
+    const resolvedBaseKey = normalizeBaseKey(resolveRuleKey ? await resolveRuleKey(rule) : baseKey)
+    const key = `${namespace}:${rule.id}:${resolvedBaseKey}`
     const primary = ruleStores.get(rule.id)
 
     if (!primary) {

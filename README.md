@@ -42,7 +42,7 @@ Use `elysia-nazli` when your Elysia app needs rate limits that are clear to conf
 - **Human duration strings** such as `'30s'`, `'15m'`, `'2h'`, and numeric milliseconds
 - **Method-aware limits** for route and prefix rules
 - **Algorithms:** fixed-window, sliding-window, token-bucket, and GCRA
-- **Key resolvers:** `ip`, `user`, `header`, `compose`, and `custom`
+- **Key resolvers:** `ip`, `user`, `header`, `bodyField`, `firstOf`, `compose`, `hmac`, and `custom`
 - **Ban windows** for stricter abuse handling
 - **Standard and legacy headers** with per-rule overrides
 - **Stores:** memory, SQLite, Redis, and custom `RateLimitStore` implementations
@@ -139,12 +139,12 @@ const app = new Elysia().use(rateLimit()).post('/login', () => 'ok', {
 
 Use route options when local readability matters. Use plugin-level `routes` when you want early `onRequest` limiting, object maps, `RegExp` paths, or several matching rules evaluated together.
 
-### Use Redis and composed keys
+### Use Redis and rule-specific keys
 
 ```ts
 import { RedisClient } from 'bun'
 import { Elysia } from 'elysia'
-import { compose, ip, rateLimit, user } from 'elysia-nazli'
+import { bodyField, firstOf, ip, rateLimit, user } from 'elysia-nazli'
 import { redisStore } from 'elysia-nazli/redis'
 
 const redis = new RedisClient('redis://localhost:6379')
@@ -152,7 +152,7 @@ const redis = new RedisClient('redis://localhost:6379')
 const app = new Elysia().use(
   rateLimit({
     algorithm: 'gcra',
-    key: compose(user('id'), ip({ trustedProxyDepth: 1 })),
+    key: firstOf(user('id'), ip({ trustedProxyDepth: 1 })),
     store: redisStore({ client: redis, adapter: 'bun', prefix: 'myapp' }),
     limit: 120,
     window: '1m',
@@ -165,6 +165,10 @@ const app = new Elysia().use(
         limit: 10,
         window: '15m',
         ban: '5m',
+        key: bodyField('email', {
+          normalize: 'email',
+          hmacSecret: Bun.env.RATE_LIMIT_KEY_SECRET!,
+        }),
       },
     },
   }),

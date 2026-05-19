@@ -101,29 +101,13 @@ Prefix matching is path-segment aware. `/api/admin` matches `/api/admin/users`, 
 
 ## Login protection
 
-For login and registration, combine a strict route rule with a key that includes the IP and a hashed account identifier. Hashing avoids storing raw emails in rate-limit keys.
+For login and registration, combine a strict route rule with a key derived from the account identifier. HMAC hashing avoids storing raw or guessable emails in rate-limit keys.
 
 ```ts
-import { createHash } from 'crypto'
-import { compose, custom, ip, rateLimit } from 'elysia-nazli'
-
-const hashEmail = (email: string) =>
-  createHash('sha256').update(email.trim().toLowerCase()).digest('hex')
+import { bodyField, firstOf, ip, rateLimit, user } from 'elysia-nazli'
 
 rateLimit({
-  key: compose(
-    ip({ trustedProxyDepth: 1 }),
-    custom(async (_ctx, info) => {
-      if (info.method !== 'POST' || info.path !== '/login') return undefined
-
-      const body = (await info.request
-        .clone()
-        .json()
-        .catch(() => null)) as { email?: string } | null
-
-      return typeof body?.email === 'string' ? `email_sha256:${hashEmail(body.email)}` : undefined
-    }),
-  ),
+  key: firstOf(user('id'), ip({ trustedProxyDepth: 1 })),
   limit: 300,
   window: '1m',
   routes: {
@@ -132,12 +116,16 @@ rateLimit({
       window: '15m',
       algorithm: 'gcra',
       ban: '5m',
+      key: bodyField('email', {
+        normalize: 'email',
+        hmacSecret: Bun.env.RATE_LIMIT_KEY_SECRET!,
+      }),
     },
   },
 })
 ```
 
-Always use `info.request.clone()` before reading a body in a key resolver so the actual route handler can still read it.
+`bodyField()` clones the request before parsing JSON, so the actual route handler can still read the body. Set a high-entropy `RATE_LIMIT_KEY_SECRET`; do not use plain SHA-256 for emails because email addresses are easy to guess.
 
 ## Proxy-safe IP keys
 
@@ -156,11 +144,39 @@ Without `trustedProxyDepth`, `ip()` ignores forwarded headers and uses Bun's dir
 ## Common key patterns
 
 ```ts
-import { compose, custom, header, ip, rateLimit, user } from 'elysia-nazli'
+import {
+  bodyField,
+  compose,
+  custom,
+  firstOf,
+  header,
+  hmac,
+  ip,
+  rateLimit,
+  user,
+} from 'elysia-nazli'
 
 rateLimit({ key: ip(), limit: 120, window: '1m' })
 rateLimit({ key: header('x-api-key'), limit: 1000, window: '1m' })
+rateLimit({ key: firstOf(user('id'), ip({ trustedProxyDepth: 1 })), limit: 120, window: '1m' })
 rateLimit({ key: compose(user('id'), ip({ trustedProxyDepth: 1 })), limit: 120, window: '1m' })
+rateLimit({
+  key: hmac('api-key', header('x-api-key'), { secret: Bun.env.RATE_LIMIT_KEY_SECRET! }),
+  limit: 1000,
+  window: '1m',
+})
+rateLimit({
+  routes: {
+    'POST /login': {
+      limit: 10,
+      window: '15m',
+      key: bodyField('email', {
+        normalize: 'email',
+        hmacSecret: Bun.env.RATE_LIMIT_KEY_SECRET!,
+      }),
+    },
+  },
+})
 rateLimit({
   key: custom(async (ctx) => `tenant:${(ctx.store as { tenantId: string }).tenantId}`),
   limit: 120,
@@ -169,6 +185,8 @@ rateLimit({
 ```
 
 `compose()` joins non-empty resolver parts. For example, `compose(user('id'), ip())` can produce `user:u1:ip:203.0.113.10`.
+
+`firstOf()` returns only the first non-empty resolver part. That is usually better for “authenticated user, otherwise IP” behavior.
 
 `keyGenerator` is still supported:
 

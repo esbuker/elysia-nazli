@@ -252,13 +252,24 @@ export const rateLimit = (options: RateLimitPluginOptions = {}) => {
     }
 
     const info: RuleMatchContext = { method, path, request: context.request }
-    const baseKey = await keyGenerator(context, info)
+    let baseKeyPromise: Promise<string> | undefined
+    const resolveDefaultKey = () => {
+      baseKeyPromise ??= Promise.resolve(keyGenerator(context, info))
+
+      return baseKeyPromise
+    }
     const now = Date.now()
     const { decisions, storeLatency } = await evaluateDecisions({
       activeRules,
       context,
       namespace,
-      baseKey,
+      resolveRuleKey: async (rule) => {
+        if (rule.key) {
+          return rule.key(context, info)
+        }
+
+        return resolveDefaultKey()
+      },
       now,
       ruleStores: stores,
       storeTimeout,
@@ -444,6 +455,7 @@ export type {
   HitResult,
   AlgorithmStoreHitInput,
   MemoryStoreConfig,
+  MaybePromise,
   OnDecisionContext,
   OnLimitContext,
   PrefixRule,
@@ -473,7 +485,12 @@ export type {
 export type { MemoryStoreOptions }
 
 export type { CreateDefaultKeyGeneratorOptions } from './core/keyGenerator'
-export type { IpResolverOptions } from './core/keyResolvers'
+export type {
+  BodyFieldResolverOptions,
+  HmacResolverOptions,
+  IpResolverOptions,
+  KeyValueNormalizer,
+} from './core/keyResolvers'
 
 export { createDefaultKeyGenerator, MemoryRateLimitStore }
-export { compose, custom, header, ip, user } from './core/keyResolvers'
+export { bodyField, compose, custom, firstOf, header, hmac, ip, user } from './core/keyResolvers'

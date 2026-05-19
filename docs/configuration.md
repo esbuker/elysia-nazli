@@ -40,35 +40,35 @@ Supported units:
 
 ## Plugin options
 
-| Option            | Type                                                         | Default                             | Description                                                                                                               |
-| ----------------- | ------------------------------------------------------------ | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `pluginName`      | `string`                                                     | `'elysia-nazli'`                    | Elysia plugin name. Separate `rateLimit()` calls get unique seeds by default, so multiple limiters compose naturally.     |
-| `seed`            | `unknown`                                                    | Auto-incremented                    | Optional Elysia plugin dedupe seed. Reuse the same `pluginName` and `seed` only when you want Elysia to dedupe instances. |
-| `namespace`       | `string`                                                     | `'rate-limit'`                      | Prefix segment in storage keys: `<namespace>:<ruleId>:<baseKey>`.                                                         |
-| `id`              | `string`                                                     | `'global'`                          | Rule id for top-level shorthand mode. Use `global.id` with explicit `global`.                                             |
-| `limit`           | `number`                                                     | -                                   | Top-level shorthand global limit. Must be a positive integer and must be used with `window`.                              |
-| `window`          | `number \| string`                                           | -                                   | Top-level shorthand global window.                                                                                        |
-| `algorithm`       | `RateLimitAlgorithm`                                         | `'fixed-window'`                    | Top-level shorthand algorithm.                                                                                            |
-| `cost`            | `number`                                                     | `1`                                 | Top-level shorthand cost per request.                                                                                     |
-| `ban`             | `number \| string`                                           | -                                   | Top-level shorthand ban duration after limit breach.                                                                      |
-| `method`          | `string \| string[]`                                         | -                                   | Top-level shorthand method filter. Values are normalized to uppercase.                                                    |
-| `global`          | `RuleConfig`                                                 | -                                   | Explicit global rule. Cannot be mixed with top-level shorthand.                                                           |
-| `prefixes`        | `PrefixRule[] \| Record<string, RuleConfig>`                 | -                                   | Prefix-based rules. Object keys are prefixes.                                                                             |
-| `routes`          | `RouteRule[] \| Record<string, RuleConfig>`                  | -                                   | Route rules. Object keys can be `'/path'` or `'METHOD /path'`; use arrays for `RegExp` paths.                             |
-| `store`           | `RateLimitStoreConfig`                                       | Memory                              | Default store for rules without a per-rule store.                                                                         |
-| `key`             | `RateLimitKeyResolver`                                       | -                                   | Preferred key resolver API. Use `ip()`, `user()`, `header()`, `compose()`, or `custom()`.                                 |
-| `keyGenerator`    | `(ctx, info) => string \| Promise<string>`                   | Default direct-IP key               | Legacy low-level key hook. Cannot be combined with `key`.                                                                 |
-| `trustProxy`      | `boolean`                                                    | `false`                             | Legacy default key behavior. Prefer `key: ip({ trustedProxyDepth })` for new proxy-aware code.                            |
-| `headers`         | `{ standard?, legacy? }`                                     | `{ standard: true, legacy: false }` | Grouped header config. Cannot be combined with `standardHeaders` or `legacyHeaders`.                                      |
-| `standardHeaders` | `boolean`                                                    | `true`                              | Backward-compatible standard header toggle.                                                                               |
-| `legacyHeaders`   | `boolean`                                                    | `false`                             | Backward-compatible legacy header toggle.                                                                                 |
-| `cleanupInterval` | `number \| string`                                           | `60000`                             | Interval for stores with `cleanup(now)`. Set `0` to disable timers.                                                       |
-| `skip`            | `(ctx) => boolean \| Promise<boolean>`                       | -                                   | Skips all rate limiting for the request when it returns `true`.                                                           |
-| `onLimit`         | `(payload) => Response \| void \| Promise<Response \| void>` | -                                   | Called when a request is blocked. Return a custom response or `void` for the default JSON 429.                            |
-| `onDecision`      | `(payload) => void \| Promise<void>`                         | -                                   | Observability hook called after evaluation. Errors are swallowed.                                                         |
-| `onStoreError`    | `'allow' \| 'block' \| function`                             | `'allow'`                           | Policy after primary and optional fallback store failure.                                                                 |
-| `storeTimeout`    | `number \| string`                                           | -                                   | Max wait for each store call. Timeout applies `onStoreError` but does not cancel underlying work.                         |
-| `fallbackStore`   | `boolean \| RateLimitStoreConfig`                            | -                                   | Secondary store tried once after a primary store throws or times out.                                                     |
+| Option            | Type                                                         | Default                             | Description                                                                                                                                  |
+| ----------------- | ------------------------------------------------------------ | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pluginName`      | `string`                                                     | `'elysia-nazli'`                    | Elysia plugin name. Separate `rateLimit()` calls get unique seeds by default, so multiple limiters compose naturally.                        |
+| `seed`            | `unknown`                                                    | Auto-incremented                    | Optional Elysia plugin dedupe seed. Reuse the same `pluginName` and `seed` only when you want Elysia to dedupe instances.                    |
+| `namespace`       | `string`                                                     | `'rate-limit'`                      | Prefix segment in storage keys: `<namespace>:<ruleId>:<baseKey>`.                                                                            |
+| `id`              | `string`                                                     | `'global'`                          | Rule id for top-level shorthand mode. Use `global.id` with explicit `global`.                                                                |
+| `limit`           | `number`                                                     | -                                   | Top-level shorthand global limit. Must be a positive integer and must be used with `window`.                                                 |
+| `window`          | `number \| string`                                           | -                                   | Top-level shorthand global window.                                                                                                           |
+| `algorithm`       | `RateLimitAlgorithm`                                         | `'fixed-window'`                    | Top-level shorthand algorithm.                                                                                                               |
+| `cost`            | `number`                                                     | `1`                                 | Top-level shorthand cost per request.                                                                                                        |
+| `ban`             | `number \| string`                                           | -                                   | Top-level shorthand ban duration after limit breach.                                                                                         |
+| `method`          | `string \| string[]`                                         | -                                   | Top-level shorthand method filter. Values are normalized to uppercase.                                                                       |
+| `global`          | `RuleConfig`                                                 | -                                   | Explicit global rule. Cannot be mixed with top-level shorthand.                                                                              |
+| `prefixes`        | `PrefixRule[] \| Record<string, RuleConfig>`                 | -                                   | Prefix-based rules. Object keys are prefixes.                                                                                                |
+| `routes`          | `RouteRule[] \| Record<string, RuleConfig>`                  | -                                   | Route rules. Object keys can be `'/path'` or `'METHOD /path'`; use arrays for `RegExp` paths.                                                |
+| `store`           | `RateLimitStoreConfig`                                       | Memory                              | Default store for rules without a per-rule store.                                                                                            |
+| `key`             | `RateLimitKeyResolver`                                       | -                                   | Preferred plugin-level key resolver API. Use `ip()`, `user()`, `header()`, `bodyField()`, `firstOf()`, `compose()`, `hmac()`, or `custom()`. |
+| `keyGenerator`    | `(ctx, info) => string \| Promise<string>`                   | Default direct-IP key               | Legacy low-level key hook. Cannot be combined with `key`.                                                                                    |
+| `trustProxy`      | `boolean`                                                    | `false`                             | Legacy default key behavior. Prefer `key: ip({ trustedProxyDepth })` for new proxy-aware code.                                               |
+| `headers`         | `{ standard?, legacy? }`                                     | `{ standard: true, legacy: false }` | Grouped header config. Cannot be combined with `standardHeaders` or `legacyHeaders`.                                                         |
+| `standardHeaders` | `boolean`                                                    | `true`                              | Backward-compatible standard header toggle.                                                                                                  |
+| `legacyHeaders`   | `boolean`                                                    | `false`                             | Backward-compatible legacy header toggle.                                                                                                    |
+| `cleanupInterval` | `number \| string`                                           | `60000`                             | Interval for stores with `cleanup(now)`. Set `0` to disable timers.                                                                          |
+| `skip`            | `(ctx) => boolean \| Promise<boolean>`                       | -                                   | Skips all rate limiting for the request when it returns `true`.                                                                              |
+| `onLimit`         | `(payload) => Response \| void \| Promise<Response \| void>` | -                                   | Called when a request is blocked. Return a custom response or `void` for the default JSON 429.                                               |
+| `onDecision`      | `(payload) => void \| Promise<void>`                         | -                                   | Observability hook called after evaluation. Errors are swallowed.                                                                            |
+| `onStoreError`    | `'allow' \| 'block' \| function`                             | `'allow'`                           | Policy after primary and optional fallback store failure.                                                                                    |
+| `storeTimeout`    | `number \| string`                                           | -                                   | Max wait for each store call. Timeout applies `onStoreError` but does not cancel underlying work.                                            |
+| `fallbackStore`   | `boolean \| RateLimitStoreConfig`                            | -                                   | Secondary store tried once after a primary store throws or times out.                                                                        |
 
 If no top-level shorthand, `global`, `prefixes`, or `routes` are set, the plugin has no plugin-level rules. That is useful when you only want route-level `{ rateLimit: { ... } }` options.
 
@@ -87,6 +87,7 @@ Rules are used by `global`, `prefixes`, `routes`, and the route macro.
 | `method`                            | No              | One HTTP method or an array. Lowercase values are accepted.            |
 | `skip`                              | No              | Per-rule skip hook. If it throws, the rule is not skipped.             |
 | `store`                             | No              | Per-rule store override.                                               |
+| `key`                               | No              | Per-rule key resolver. Overrides the plugin-level key for this rule.   |
 | `headers`                           | No              | Per-rule grouped header override.                                      |
 | `standardHeaders` / `legacyHeaders` | No              | Backward-compatible per-rule header overrides.                         |
 
@@ -111,6 +112,30 @@ rateLimit({
 ```
 
 Route map keys may include a method. If a route map key contains a method and the rule also defines `method`, construction throws instead of guessing.
+
+Rules can use their own key resolver when one endpoint needs a different identity dimension:
+
+```ts
+import { bodyField, firstOf, ip, rateLimit, user } from 'elysia-nazli'
+
+rateLimit({
+  key: firstOf(user('id'), ip({ trustedProxyDepth: 1 })),
+  limit: 300,
+  window: '1m',
+  routes: {
+    'POST /login': {
+      limit: 10,
+      window: '15m',
+      key: bodyField('email', {
+        normalize: 'email',
+        hmacSecret: Bun.env.RATE_LIMIT_KEY_SECRET!,
+      }),
+    },
+  },
+})
+```
+
+Use `compose()` when you intentionally want all dimensions in one key, such as `user:u1:ip:203.0.113.10`. Use `firstOf()` when you want the first available stable identity, such as user id before IP.
 
 Use array syntax for `RegExp` paths or deliberate ordering:
 

@@ -179,6 +179,7 @@ const normalizeRuleConfig = (id: string, rule: RuleConfig): NormalizedRuleConfig
     algorithm: normalizeAlgorithm(rule.algorithm, id),
     cost: rule.cost,
     store: rule.store,
+    key: rule.key,
     method: rule.method,
     skip: rule.skip,
     standardHeaders: headers.standardHeaders,

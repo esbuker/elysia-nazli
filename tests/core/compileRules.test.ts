@@ -275,4 +275,15 @@ describe('compileRules', () => {
     expect(find(rules, 'global')!.algorithm).toBe('fixed-window')
     expect(find(rules, 'route:/login:0')!.algorithm).toBe('gcra')
   })
+
+  it('preserves rule-level key resolvers', () => {
+    const key = () => 'route-key'
+    const rules = compileRules({
+      routes: {
+        'POST /login': { limit: 10, window: '1m', key },
+      },
+    })
+
+    expect(find(rules, 'route:/login:0')!.key).toBe(key)
+  })
 })
