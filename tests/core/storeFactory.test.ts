@@ -25,8 +25,10 @@ describe('buildStore', () => {
     expect((store as MemoryRateLimitStore).size()).toBe(2)
   })
 
-  it('points typed sqlite configs to the opt-in subpath', () => {
-    expect(() => buildStore({ type: 'sqlite', path: ':memory:' })).toThrow(/elysia-nazli\/sqlite/)
+  it('does not accept typed sqlite configs through the core store config path', () => {
+    expect(() =>
+      buildStore({ type: 'sqlite', path: ':memory:' } as unknown as RateLimitStore),
+    ).toThrow(/Unknown rate limit store type: sqlite/)
   })
 
   it('passes through a user-provided RateLimitStore', () => {
@@ -97,10 +99,10 @@ describe('ruleStoreCacheKey', () => {
     expect(ruleStoreCacheKey({ type: 'memory' })).toBe(ruleStoreCacheKey({ type: 'memory' }))
   })
 
-  it('maps equivalent sqlite configs to the same cache key', () => {
+  it('maps unknown typed configs defensively when forced at runtime', () => {
     expect(
-      ruleStoreCacheKey({ type: 'sqlite', path: ':memory:', tableName: 't1', wal: false }),
-    ).toBe(ruleStoreCacheKey({ type: 'sqlite', path: ':memory:', tableName: 't1', wal: false }))
+      ruleStoreCacheKey({ type: 'sqlite', path: ':memory:' } as unknown as RateLimitStore),
+    ).toBe(ruleStoreCacheKey({ type: 'sqlite', path: ':memory:' } as unknown as RateLimitStore))
   })
 
   it('uses reference identity for custom stores', () => {

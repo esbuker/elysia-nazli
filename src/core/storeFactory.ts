@@ -1,6 +1,8 @@
 import { MemoryRateLimitStore } from '../plugins/memoryStore'
 import type { RateLimitStore, RateLimitStoreConfig } from '../types'
 
+type TypedStoreConfig = { type: string; [key: string]: unknown }
+
 const isRateLimitStore = (value: unknown): value is RateLimitStore =>
   typeof value === 'object' &&
   value !== null &&
@@ -29,17 +31,13 @@ export const ruleStoreCacheKey = (storeConfig?: RateLimitStoreConfig): RuleStore
     return storeConfig
   }
 
-  if (storeConfig.type === 'memory') {
+  const typed = storeConfig as TypedStoreConfig
+
+  if (typed.type === 'memory') {
     return `memory:${storeConfig.maxEntries ?? 'default'}`
   }
 
-  if (storeConfig.type === 'sqlite') {
-    const c = storeConfig
-
-    return `sqlite:${c.path ?? ''}:${c.tableName ?? ''}:${c.wal ?? true}:${c.busyTimeout ?? ''}`
-  }
-
-  return `typed:${(storeConfig as { type: string }).type}:${JSON.stringify(storeConfig)}`
+  return `typed:${typed.type}:${JSON.stringify(storeConfig)}`
 }
 
 export const buildStore = (store?: RateLimitStoreConfig): RateLimitStore => {
@@ -55,16 +53,12 @@ export const buildStore = (store?: RateLimitStoreConfig): RateLimitStore => {
     return store
   }
 
-  if (store.type === 'memory')
+  const typed = store as TypedStoreConfig
+
+  if (typed.type === 'memory')
     return new MemoryRateLimitStore(
       store.maxEntries !== undefined ? { maxEntries: store.maxEntries } : {},
     )
 
-  if (store.type === 'sqlite') {
-    throw new Error(
-      'SQLite stores are opt-in via elysia-nazli/sqlite. Import sqliteStore from "elysia-nazli/sqlite" and pass sqliteStore(...) as the store instance.',
-    )
-  }
-
-  throw new Error(`Unknown rate limit store type: ${(store as { type: string }).type}`)
+  throw new Error(`Unknown rate limit store type: ${typed.type}`)
 }

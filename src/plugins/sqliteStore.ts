@@ -29,7 +29,7 @@ export class SqliteRateLimitStore implements RateLimitStore {
     if (config.busyTimeout !== undefined) {
       const busyTimeout = parseDuration(config.busyTimeout, 'sqlite busyTimeout')
 
-      this.db.run(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(busyTimeout))}`)
+      this.db.run(`PRAGMA busy_timeout = ${Math.max(0, busyTimeout)}`)
     }
 
     // WAL is silently ignored for in-memory SQLite (it falls back to MEMORY

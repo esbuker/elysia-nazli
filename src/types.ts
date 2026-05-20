@@ -88,6 +88,7 @@ export interface RuleConfig {
   store?: RateLimitStoreConfig
   key?: RateLimitKeyResolver
   method?: RateLimitHttpMethod | RateLimitHttpMethod[]
+  onStoreError?: StoreErrorPolicy
   skip?: (ctx: Context) => MaybePromise<boolean>
   standardHeaders?: boolean
   legacyHeaders?: boolean
@@ -127,7 +128,7 @@ export interface MemoryStoreConfig {
   maxEntries?: number
 }
 
-export type RateLimitStoreConfig = SqliteStoreConfig | MemoryStoreConfig | RateLimitStore
+export type RateLimitStoreConfig = MemoryStoreConfig | RateLimitStore
 
 export type RedisAdapterMode = 'auto' | 'bun' | 'ioredis' | 'node-redis' | 'custom'
 
@@ -165,6 +166,13 @@ export interface RedisStoreOptions {
   client?: RedisClientLike
   prefix?: string
   adapter?: RedisAdapterMode
+  /**
+   * Wrap related physical Redis keys in a hash tag so Lua scripts can run in
+   * Redis Cluster. Disable only when you need the pre-existing key layout.
+   *
+   * @default true
+   */
+  clusterHashTag?: boolean
   /**
    * Force the multi-command path even when the client supports atomic Lua.
    * Mostly useful for testing the fallback. Default: false (use Lua when
@@ -281,6 +289,16 @@ export interface RateLimitPluginOptions {
   key?: RateLimitKeyResolver
   keyGenerator?: (ctx: Context, info: RuleMatchContext) => MaybePromise<string>
   /**
+   * Hash every resolved base key before adding namespace/rule segments. Useful
+   * when key material may contain secrets or unbounded user-controlled text.
+   */
+  hashKeys?: boolean
+  /**
+   * Maximum resolved base-key length before storage. If exceeded, the key is
+   * hashed before storage.
+   */
+  maxKeyLength?: number
+  /**
    * When `true`, the default key generator trusts `cf-connecting-ip`,
    * `x-real-ip`, and `x-forwarded-for` for client identity. **Only use behind a
    * reverse proxy you control** that sets or strips these headers; otherwise
@@ -291,6 +309,11 @@ export interface RateLimitPluginOptions {
    */
   trustProxy?: boolean
   onLimit?: (payload: OnLimitContext) => MaybePromise<Response | void>
+  /**
+   * Custom `onLimit` responses are normalized to status 429 by default.
+   * Disable only when a non-429 blocked response is intentional.
+   */
+  preserveOnLimitStatus?: boolean
   /**
    * Fired at most once per request that matched rules and ran store evaluation
    * (including when every rule was skipped or failed open and `decisions` is
