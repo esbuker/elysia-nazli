@@ -10,6 +10,7 @@ import type {
   StoreErrorPolicy,
   StoreHitInput,
 } from '../types'
+import { sha256Hex } from '../utilities'
 
 class StoreTimeoutError extends Error {
   constructor(ruleId: string, ms: number) {
@@ -89,14 +90,29 @@ export interface EvaluateDecisionsResult {
   storeLatency: number
 }
 
-const normalizeBaseKey = (value: unknown): string => {
+const normalizeBaseKey = (
+  value: unknown,
+  options: { hashKeys?: boolean; maxKeyLength?: number } = {},
+): string => {
   if (typeof value !== 'string') {
     return 'unknown'
   }
 
   const trimmed = value.trim()
 
-  return trimmed.length > 0 ? trimmed : 'unknown'
+  if (trimmed.length === 0) {
+    return 'unknown'
+  }
+
+  if (options.hashKeys) {
+    return `sha256:${sha256Hex(trimmed)}`
+  }
+
+  if (options.maxKeyLength !== undefined && trimmed.length > options.maxKeyLength) {
+    return `sha256:${sha256Hex(trimmed)}`
+  }
+
+  return trimmed
 }
 
 const callStore = async (
@@ -138,6 +154,8 @@ export const evaluateDecisions = async ({
   storeTimeout,
   onStoreError = 'allow',
   fallbackStore,
+  hashKeys,
+  maxKeyLength,
 }: {
   activeRules: CompiledRule[]
   context: Context
@@ -149,6 +167,8 @@ export const evaluateDecisions = async ({
   storeTimeout?: number
   onStoreError?: StoreErrorPolicy
   fallbackStore?: RateLimitStore
+  hashKeys?: boolean
+  maxKeyLength?: number
 }): Promise<EvaluateDecisionsResult> => {
   const decisions: RateLimitDecision[] = []
   let storeLatency = 0
@@ -168,7 +188,13 @@ export const evaluateDecisions = async ({
       }
     }
 
-    const resolvedBaseKey = normalizeBaseKey(resolveRuleKey ? await resolveRuleKey(rule) : baseKey)
+    const resolvedBaseKey = normalizeBaseKey(
+      resolveRuleKey ? await resolveRuleKey(rule) : baseKey,
+      {
+        hashKeys,
+        maxKeyLength,
+      },
+    )
     const key = `${namespace}:${rule.id}:${resolvedBaseKey}`
     const primary = ruleStores.get(rule.id)
 
@@ -218,7 +244,7 @@ export const evaluateDecisions = async ({
 
           await applyStoreErrorPolicy(
             {
-              onStoreError,
+              onStoreError: rule.onStoreError ?? onStoreError,
               context,
               rule,
               key,
@@ -243,7 +269,7 @@ export const evaluateDecisions = async ({
 
         await applyStoreErrorPolicy(
           {
-            onStoreError,
+            onStoreError: rule.onStoreError ?? onStoreError,
             context,
             rule,
             key,
@@ -269,7 +295,7 @@ export const evaluateDecisions = async ({
 
     await applyStoreErrorPolicy(
       {
-        onStoreError,
+        onStoreError: rule.onStoreError ?? onStoreError,
         context,
         rule,
         key,

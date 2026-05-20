@@ -146,6 +146,106 @@ describe('rateLimit plugin (production) - onStoreError', () => {
     expect(res.status).toBe(200)
     expect(res.headers.get('ratelimit-limit')).toBe('100')
   })
+
+  it('allows per-rule onStoreError to override the global policy', async () => {
+    const app = new Elysia()
+      .use(
+        rateLimit({
+          global: {
+            id: 'login',
+            limit: 5,
+            window: 60_000,
+            store: throwingStore(),
+            onStoreError: 'block',
+          },
+          onStoreError: 'allow',
+          cleanupInterval: 0,
+          keyGenerator: () => 'k',
+        }),
+      )
+      .get('/login', () => 'ok')
+
+    const res = await app.handle(new Request('http://localhost/login'))
+
+    expect(res.status).toBe(429)
+    expect(res.headers.get('ratelimit-limit')).toBe('5')
+  })
+})
+
+describe('rateLimit plugin (production) - key guardrails', () => {
+  it('hashes base keys before storage when hashKeys is enabled or maxKeyLength is exceeded', async () => {
+    let seenKey = ''
+    const app = new Elysia()
+      .use(
+        rateLimit({
+          global: { id: 'g', limit: 1, window: 60_000 },
+          hashKeys: true,
+          maxKeyLength: 4,
+          store: {
+            hit: (input) => {
+              seenKey = input.key
+
+              return {
+                key: input.key,
+                count: 1,
+                remaining: 0,
+                limit: input.limit,
+                resetAt: input.now + input.window,
+                blocked: false,
+                retryAfter: 0,
+              }
+            },
+          },
+          cleanupInterval: 0,
+          keyGenerator: () => 'very-long-user-controlled-key',
+        }),
+      )
+      .get('/x', () => 'ok')
+
+    const res = await app.handle(new Request('http://localhost/x'))
+
+    expect(res.status).toBe(200)
+    expect(seenKey).toMatch(/^rate-limit:g:sha256:[a-f0-9]{64}$/)
+    expect(seenKey).not.toContain('very-long-user-controlled-key')
+  })
+
+  it('hashes only overlong keys when maxKeyLength is exceeded', async () => {
+    let seenKey = ''
+    const app = new Elysia()
+      .use(
+        rateLimit({
+          global: { id: 'g', limit: 1, window: 60_000 },
+          maxKeyLength: 4,
+          store: {
+            hit: (input) => {
+              seenKey = input.key
+
+              return {
+                key: input.key,
+                count: 1,
+                remaining: 0,
+                limit: input.limit,
+                resetAt: input.now + input.window,
+                blocked: false,
+                retryAfter: 0,
+              }
+            },
+          },
+          cleanupInterval: 0,
+          keyGenerator: () => 'long-key',
+        }),
+      )
+      .get('/x', () => 'ok')
+
+    await app.handle(new Request('http://localhost/x'))
+
+    expect(seenKey).toMatch(/^rate-limit:g:sha256:[a-f0-9]{64}$/)
+  })
+
+  it('validates maxKeyLength at construction', () => {
+    expect(() => rateLimit({ maxKeyLength: 0 })).toThrow(/maxKeyLength/)
+    expect(() => rateLimit({ maxKeyLength: 1.5 })).toThrow(/maxKeyLength/)
+  })
 })
 
 describe('rateLimit plugin (production) - storeTimeout', () => {

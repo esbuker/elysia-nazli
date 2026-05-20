@@ -5,6 +5,7 @@ import type { RateLimitKeyResolver, RuleMatchContext } from '../types'
 export interface IpResolverOptions {
   trustedProxyDepth?: number
   trustProxy?: boolean
+  strict?: boolean
   fallback?: string
 }
 
@@ -77,10 +78,67 @@ const getPath = (source: unknown, path: string): unknown => {
   return current
 }
 
-const directSocketIp = (ctx: Context): string | undefined => {
+const normalizeIpv4 = (candidate: string): string | undefined => {
+  const parts = candidate.split('.')
+
+  if (parts.length !== 4) {
+    return undefined
+  }
+
+  const octets: string[] = []
+
+  for (const part of parts) {
+    if (!/^\d+$/.test(part) || (part.length > 1 && part.startsWith('0'))) {
+      return undefined
+    }
+
+    const value = Number(part)
+
+    if (!Number.isInteger(value) || value < 0 || value > 255) {
+      return undefined
+    }
+
+    octets.push(String(value))
+  }
+
+  return octets.join('.')
+}
+
+const normalizeIpv6 = (candidate: string): string | undefined => {
+  if (!candidate.includes(':') || candidate.includes('[') || candidate.includes(']')) {
+    return undefined
+  }
+
+  try {
+    const { hostname } = new URL(`http://[${candidate}]/`)
+
+    return hostname.slice(1, -1).toLowerCase()
+  } catch {
+    return undefined
+  }
+}
+
+const normalizeStrictIp = (candidate: string): string | undefined =>
+  normalizeIpv4(candidate) ?? normalizeIpv6(candidate)
+
+const normalizeIpCandidate = (value: string | undefined, strict: boolean): string | undefined => {
+  const candidate = compact(value)
+
+  if (!candidate) {
+    return undefined
+  }
+
+  if (!strict) {
+    return candidate
+  }
+
+  return normalizeStrictIp(candidate)
+}
+
+const directSocketIp = (ctx: Context, strict: boolean): string | undefined => {
   const ip = ctx.server?.requestIP?.(ctx.request)?.address?.trim()
 
-  return ip && ip.length > 0 ? ip : undefined
+  return normalizeIpCandidate(ip, strict)
 }
 
 const forwardedIps = (ctx: Context): string[] =>
@@ -89,7 +147,7 @@ const forwardedIps = (ctx: Context): string[] =>
     .map((part) => part.trim())
     .filter(Boolean)
 
-const trustedForwardedIp = (ctx: Context, depth: number): string | undefined => {
+const trustedForwardedIp = (ctx: Context, depth: number, strict: boolean): string | undefined => {
   const ips = forwardedIps(ctx)
 
   if (ips.length === 0) {
@@ -98,23 +156,23 @@ const trustedForwardedIp = (ctx: Context, depth: number): string | undefined => 
 
   const index = ips.length - depth
 
-  return ips[Math.max(index, 0)]
+  return normalizeIpCandidate(ips[Math.max(index, 0)], strict)
 }
 
-const proxyHeaderIp = (ctx: Context): string | undefined => {
-  const cf = compact(ctx.request.headers.get('cf-connecting-ip'))
+const proxyHeaderIp = (ctx: Context, strict: boolean): string | undefined => {
+  const cf = normalizeIpCandidate(ctx.request.headers.get('cf-connecting-ip') ?? undefined, strict)
 
   if (cf) return cf
 
-  const real = compact(ctx.request.headers.get('x-real-ip'))
+  const real = normalizeIpCandidate(ctx.request.headers.get('x-real-ip') ?? undefined, strict)
 
   if (real) return real
 
-  return forwardedIps(ctx)[0]
+  return normalizeIpCandidate(forwardedIps(ctx)[0], strict)
 }
 
 export const ip = (options: IpResolverOptions = {}): RateLimitKeyResolver => {
-  const { trustedProxyDepth, trustProxy = false, fallback = 'unknown' } = options
+  const { trustedProxyDepth, trustProxy = false, strict = false, fallback = 'unknown' } = options
 
   if (
     trustedProxyDepth !== undefined &&
@@ -125,9 +183,9 @@ export const ip = (options: IpResolverOptions = {}): RateLimitKeyResolver => {
 
   return (ctx) => {
     const resolved =
-      (trustedProxyDepth ? trustedForwardedIp(ctx, trustedProxyDepth) : undefined) ??
-      (trustProxy ? proxyHeaderIp(ctx) : undefined) ??
-      directSocketIp(ctx) ??
+      (trustedProxyDepth ? trustedForwardedIp(ctx, trustedProxyDepth, strict) : undefined) ??
+      (trustProxy ? proxyHeaderIp(ctx, strict) : undefined) ??
+      directSocketIp(ctx, strict) ??
       fallback
 
     return keyPart('ip', resolved)

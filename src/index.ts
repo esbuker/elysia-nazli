@@ -61,6 +61,18 @@ const resolvePluginHeaders = (options: RateLimitPluginOptions) => {
   }
 }
 
+const normalizeOnLimitResponse = (response: Response, preserveStatus: boolean) => {
+  if (preserveStatus || response.status === 429) {
+    return response
+  }
+
+  return new Response(response.body, {
+    status: 429,
+    statusText: 'Too Many Requests',
+    headers: response.headers,
+  })
+}
+
 export const memoryStore = (options: MemoryStoreOptions | number = {}): MemoryStoreConfig => {
   if (typeof options === 'number') {
     return { type: 'memory', maxEntries: options }
@@ -97,6 +109,8 @@ export const rateLimit = (options: RateLimitPluginOptions = {}) => {
   const pluginName = options.pluginName ?? 'elysia-nazli'
   const pluginSeed = options.seed ?? ++nextPluginSeed
   const onStoreError = options.onStoreError ?? 'allow'
+  const hashKeys = options.hashKeys ?? false
+  const maxKeyLength = options.maxKeyLength
   const storeTimeout =
     options.storeTimeout !== undefined
       ? parseDuration(options.storeTimeout, 'storeTimeout')
@@ -108,6 +122,10 @@ export const rateLimit = (options: RateLimitPluginOptions = {}) => {
 
   if (storeTimeout !== undefined && (!Number.isFinite(storeTimeout) || storeTimeout < 0)) {
     throw new Error('rateLimit: storeTimeout must be a finite, non-negative number when provided')
+  }
+
+  if (maxKeyLength !== undefined && (!Number.isInteger(maxKeyLength) || maxKeyLength <= 0)) {
+    throw new Error('rateLimit: maxKeyLength must be a positive integer when provided')
   }
 
   const resolveFallbackStore = (): RateLimitStore | undefined => {
@@ -275,6 +293,8 @@ export const rateLimit = (options: RateLimitPluginOptions = {}) => {
       storeTimeout,
       onStoreError,
       fallbackStore: fallbackRateLimitStore,
+      hashKeys,
+      maxKeyLength,
     })
 
     if (decisions.length === 0) {
@@ -337,15 +357,17 @@ export const rateLimit = (options: RateLimitPluginOptions = {}) => {
       })
 
       if (custom) {
+        const response = normalizeOnLimitResponse(custom, options.preserveOnLimitStatus ?? false)
+
         // Make sure rate-limit headers we already computed survive even if
         // the user returned a fully formed Response.
         for (const [name, value] of Object.entries(context.set.headers)) {
-          if (!custom.headers.has(name)) {
-            custom.headers.set(name, String(value))
+          if (!response.headers.has(name)) {
+            response.headers.set(name, String(value))
           }
         }
 
-        return custom
+        return response
       }
     }
 

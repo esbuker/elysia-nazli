@@ -77,6 +77,28 @@ describe('ergonomic key resolvers', () => {
     )
   })
 
+  it('ip({ strict: true }) ignores malformed proxy values and normalizes IPv6 case', async () => {
+    const resolver = ip({ trustProxy: true, strict: true, fallback: 'anonymous' })
+    const malformed = makeCtx({ 'cf-connecting-ip': 'not an ip', 'x-real-ip': 'still bad' })
+    const ipv6 = makeCtx({ 'cf-connecting-ip': '2001:DB8::ABCD' })
+
+    expect(
+      await resolver(malformed, { method: 'GET', path: '/', request: malformed.request }),
+    ).toBe('ip:anonymous')
+    expect(await resolver(ipv6, { method: 'GET', path: '/', request: ipv6.request })).toBe(
+      'ip:2001:db8::abcd',
+    )
+  })
+
+  it('ip({ strict: true, trustedProxyDepth }) skips invalid selected forwarded hops', async () => {
+    const resolver = ip({ trustedProxyDepth: 1, strict: true, fallback: 'anonymous' })
+    const ctx = makeCtx({ 'x-forwarded-for': '203.0.113.10, spoofed' })
+
+    expect(await resolver(ctx, { method: 'GET', path: '/', request: ctx.request })).toBe(
+      'ip:anonymous',
+    )
+  })
+
   it('header() resolves case-insensitive request headers', async () => {
     const resolver = header('X-API-Key')
     const ctx = makeCtx({ 'x-api-key': 'secret' })

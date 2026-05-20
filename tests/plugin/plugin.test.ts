@@ -486,7 +486,7 @@ describe('rateLimit plugin - matching & headers', () => {
 })
 
 describe('rateLimit plugin - onLimit', () => {
-  it('uses the user-supplied Response and preserves rate-limit headers', async () => {
+  it('uses the user-supplied Response body, normalizes status to 429, and preserves headers', async () => {
     const app = new Elysia()
       .use(
         rateLimit({
@@ -507,7 +507,7 @@ describe('rateLimit plugin - onLimit', () => {
     await app.handle(new Request('http://localhost/x'))
     const blocked = await app.handle(new Request('http://localhost/x'))
 
-    expect(blocked.status).toBe(418)
+    expect(blocked.status).toBe(429)
     expect(blocked.headers.get('x-mine')).toBe('yes')
     expect(blocked.headers.get('ratelimit-limit')).toBe('1')
     expect(blocked.headers.get('ratelimit-remaining')).toBe('0')
@@ -516,6 +516,28 @@ describe('rateLimit plugin - onLimit', () => {
 
     expect(body.custom).toBeTrue()
     expect(body.retryAfter).toBeGreaterThan(0)
+  })
+
+  it('can preserve a custom onLimit status when explicitly configured', async () => {
+    const app = new Elysia()
+      .use(
+        rateLimit({
+          namespace: 'onlimit-preserve-status',
+          global: { id: 'g', limit: 1, window: 60_000 },
+          store: { type: 'memory' },
+          cleanupInterval: 0,
+          keyGenerator: () => 'k',
+          preserveOnLimitStatus: true,
+          onLimit: () => new Response('blocked', { status: 418 }),
+        }),
+      )
+      .get('/x', () => 'ok')
+
+    await app.handle(new Request('http://localhost/x'))
+    const blocked = await app.handle(new Request('http://localhost/x'))
+
+    expect(blocked.status).toBe(418)
+    expect(blocked.headers.get('ratelimit-limit')).toBe('1')
   })
 
   it('does not overwrite headers the user explicitly set on their Response', async () => {
