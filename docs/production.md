@@ -157,12 +157,16 @@ rateLimit({
 The Redis store:
 
 - Uses Lua `EVAL`, `send('EVAL', ...)`, or `sendCommand(['EVAL', ...])` when available for fixed-window and GCRA.
+- Uses Redis Cluster-compatible hash tags for related physical keys by default.
 - Uses Redis counters for sliding-window.
 - Uses portable state writes for token-bucket.
-- Switches to portable command/state paths for the lifetime of the store instance if Lua fails.
+- Switches to portable command/state paths for the lifetime of the store instance only when Lua appears disabled or restricted. Transient EVAL failures use the portable path for that request and retry Lua on later requests.
 - Can force portable behavior with `disableAtomicScript: true`.
 
-For multi-instance production, prefer Redis with `fixed-window`, `sliding-window`, or `gcra`. `token-bucket` is supported, but the Redis token-bucket path prioritizes portability over strict atomicity.
+For multi-instance production, prefer Redis with `fixed-window` or `gcra` when
+strict atomicity matters most. `sliding-window` and `token-bucket` are supported,
+but their Redis paths prioritize portability over fully atomic multi-command
+updates.
 
 ## Headers and custom 429 responses
 
@@ -191,7 +195,10 @@ rateLimit({
 })
 ```
 
-The plugin merges missing rate-limit headers into custom responses unless you already set them.
+The plugin normalizes custom `onLimit` responses to status `429` and merges
+missing rate-limit headers unless you already set them. Set
+`preserveOnLimitStatus: true` only when a non-429 blocked response is
+intentional.
 
 ## Multiple plugin instances
 

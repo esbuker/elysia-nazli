@@ -182,6 +182,7 @@ Redis options:
 | `client`              | Bun's default Redis client | Redis-like client instance.                             |
 | `prefix`              | `'nazli'`                  | Prefix used inside Redis keys.                          |
 | `adapter`             | `'auto'`                   | `auto`, `bun`, `ioredis`, `node-redis`, or `custom`.    |
+| `clusterHashTag`      | `true`                     | Keeps related keys in one Redis Cluster hash slot.      |
 | `disableAtomicScript` | `false`                    | Forces multi-command behavior even if Lua is available. |
 
 Required client methods depend on the algorithms you use:
@@ -197,10 +198,13 @@ Required client methods depend on the algorithms you use:
 Redis behavior:
 
 - Fixed-window and GCRA prefer Lua-backed atomic paths when available.
-- If Lua fails, the store switches to portable command/state paths for that store instance.
+- If Lua appears disabled or restricted, the store switches to portable
+  command/state paths for that store instance. Transient EVAL failures fall back
+  only for that request.
 - Sliding-window uses Redis counters.
 - Token-bucket uses portable state writes for compatibility.
-- For Redis Cluster, make sure your prefix strategy keeps related keys in the same hash slot when using Lua.
+- For Redis Cluster, related keys use the same hash tag by default. Set
+  `clusterHashTag: false` only if you need the legacy physical key layout.
 
 ## Hybrid stores
 
