@@ -55,7 +55,7 @@ describe('createBunRedisStore - basic counting', () => {
 
     const incrCall = fake.calls.find((c) => c.name === 'incrby')!
 
-    expect(incrCall.args[0]).toBe('p:counter:user:1')
+    expect(incrCall.args[0]).toBe('p:{user%3A1}:counter')
   })
 
   it('falls back to "nazli" prefix when none provided', async () => {
@@ -64,7 +64,16 @@ describe('createBunRedisStore - basic counting', () => {
 
     await store.hit({ key: 'k', limit: 1, window: 1000, cost: 1, now: Date.now() })
 
-    expect(fake.calls[0]?.args[0]).toBe('nazli:counter:k')
+    expect(fake.calls[0]?.args[0]).toBe('nazli:{k}:counter')
+  })
+
+  it('can use the legacy physical key layout when clusterHashTag is disabled', async () => {
+    const fake = makeFakeRedis()
+    const store = createBunRedisStore({ client: fake, prefix: 'p', clusterHashTag: false })
+
+    await store.hit({ key: 'k', limit: 1, window: 1000, cost: 1, now: Date.now() })
+
+    expect(fake.calls[0]?.args[0]).toBe('p:counter:k')
   })
 
   it('charges cost > 1 in a single call', async () => {
@@ -109,8 +118,8 @@ describe('createBunRedisStore - TTL safety', () => {
   it('re-arms TTL when the counter has no expiry (key survived a crash)', async () => {
     const fake = makeFakeRedis()
 
-    fake.store.set('p:counter:k', 4)
-    fake.ttl.set('p:counter:k', -1)
+    fake.store.set('p:{k}:counter', 4)
+    fake.ttl.set('p:{k}:counter', -1)
 
     const store = createBunRedisStore({ client: fake, prefix: 'p' })
 
@@ -125,8 +134,8 @@ describe('createBunRedisStore - TTL safety', () => {
   it('does NOT re-arm TTL on a healthy mid-window hit (count > cost AND ttl > 0)', async () => {
     const fake = makeFakeRedis()
 
-    fake.store.set('p:counter:k', 3)
-    fake.ttl.set('p:counter:k', 5_000)
+    fake.store.set('p:{k}:counter', 3)
+    fake.ttl.set('p:{k}:counter', 5_000)
 
     const store = createBunRedisStore({ client: fake, prefix: 'p' })
 
@@ -140,14 +149,14 @@ describe('createBunRedisStore - TTL safety', () => {
   it('preserves the existing TTL on a healthy mid-window hit (regression: drift)', async () => {
     const fake = makeFakeRedis()
 
-    fake.store.set('p:counter:k', 2)
-    fake.ttl.set('p:counter:k', 7_500)
+    fake.store.set('p:{k}:counter', 2)
+    fake.ttl.set('p:{k}:counter', 7_500)
 
     const store = createBunRedisStore({ client: fake, prefix: 'p' })
     const r = await store.hit({ key: 'k', limit: 10, window: 60_000, cost: 1, now: 1_000 })
 
     expect(r.resetAt).toBe(1_000 + 7_500)
-    expect(fake.ttl.get('p:counter:k')).toBe(7_500)
+    expect(fake.ttl.get('p:{k}:counter')).toBe(7_500)
   })
 })
 
@@ -164,7 +173,7 @@ describe('createBunRedisStore - ban window', () => {
     const psetexCall = fake.calls.find((c) => c.name === 'psetex')
 
     expect(psetexCall).toBeDefined()
-    expect(psetexCall!.args[0]).toBe('p:ban:k')
+    expect(psetexCall!.args[0]).toBe('p:{k}:ban')
     expect(psetexCall!.args[1]).toBe(5000)
     expect(breach.banUntil).toBe(now + 5000)
   })
@@ -200,7 +209,7 @@ describe('createBunRedisStore - ban window', () => {
     await store.hit({ key: 'k', limit: 1, window: 500, cost: 1, now: Date.now() })
     await store.hit({ key: 'k', limit: 1, window: 500, cost: 1, now: Date.now() })
 
-    expect(fake.calls.some((c) => c.name === 'pttl' && c.args[0] === 'p:ban:k')).toBeFalse()
+    expect(fake.calls.some((c) => c.name === 'pttl' && c.args[0] === 'p:{k}:ban')).toBeFalse()
     expect(fake.calls.some((c) => c.name === 'psetex')).toBeFalse()
   })
 })
@@ -345,7 +354,7 @@ describe('createBunRedisStore - atomic Lua path', () => {
     })
 
     expect(fake.evalCalls.length).toBe(1)
-    expect(fake.evalCalls[0]!.keys).toEqual(['p:counter:k', 'p:ban:k'])
+    expect(fake.evalCalls[0]!.keys).toEqual(['p:{k}:counter', 'p:{k}:ban'])
     expect(fake.evalCalls[0]!.args).toEqual([1, 5, 9_000, 30_000])
     expect(fake.calls.length).toBe(0)
 
@@ -389,8 +398,8 @@ describe('createBunRedisStore - atomic Lua path', () => {
     const args = fake.sendCalls[0]!.args
 
     expect(args[1]).toBe('2')
-    expect(args[2]).toBe('p:counter:k')
-    expect(args[3]).toBe('p:ban:k')
+    expect(args[2]).toBe('p:{k}:counter')
+    expect(args[3]).toBe('p:{k}:ban')
     expect(r.count).toBe(1)
   })
 
@@ -428,5 +437,30 @@ describe('createBunRedisStore - atomic Lua path', () => {
     expect(r1.count).toBe(1)
     expect(r2.count).toBe(2)
     expect(fake.calls.filter((c) => c.name === 'incrby').length).toBe(2)
+  })
+
+  it('retries atomic mode after transient EVAL failures', async () => {
+    const fake = makeAtomicFake()
+    let evalAttempts = 0
+    const originalEval = fake.client.eval!
+
+    fake.client.eval = async (...args) => {
+      evalAttempts++
+
+      if (evalAttempts === 1) {
+        throw new Error('ECONNRESET')
+      }
+
+      return originalEval(...args)
+    }
+
+    const store = createBunRedisStore({ client: fake.client, prefix: 'p' })
+
+    const r1 = await store.hit({ key: 'k', limit: 5, window: 1_000, cost: 1, now: 1_000 })
+    const r2 = await store.hit({ key: 'k', limit: 5, window: 1_000, cost: 1, now: 1_000 })
+
+    expect(evalAttempts).toBe(2)
+    expect(r1.count).toBe(1)
+    expect(r2.count).toBe(2)
   })
 })

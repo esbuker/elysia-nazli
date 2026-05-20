@@ -44,9 +44,8 @@ interface NormalizedRedisClient {
  *      ban window.
  *   4. Read both TTLs and return them.
  *
- * The script is idempotent and safe to run on a Redis cluster (both keys
- * share the same `{tag}` so make sure your prefix uses a hash-tag if you
- * deploy on cluster mode).
+ * The script is idempotent and safe to run on a Redis cluster when related
+ * keys share the same hash tag. The store applies that hash tag by default.
  */
 const ATOMIC_SCRIPT = `
 local counterKey = KEYS[1]
@@ -128,6 +127,14 @@ return { 0, remaining, reset, 0, 0, limit - remaining }
 
 const isFunction = (value: unknown): value is (...args: unknown[]) => unknown =>
   typeof value === 'function'
+
+const isPermanentLuaFailure = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error)
+
+  return /NOSCRIPT|unknown command|not supported|disabled|permission|NOPERM|ERR unknown command/i.test(
+    message,
+  )
+}
 
 const detectAdapter = (client: RedisClientLike): RedisAdapterMode => {
   if (isFunction(client.sendCommand) || isFunction(client.incrBy) || isFunction(client.pSetEx)) {
@@ -309,6 +316,28 @@ const parseGcraResult = (
   }
 }
 
+const redisHashTag = (logicalKey: string) => `{${encodeURIComponent(logicalKey)}}`
+
+const physicalKey = ({
+  prefix,
+  kind,
+  logicalKey,
+  clusterHashTag,
+  suffix,
+}: {
+  prefix: string
+  kind: string
+  logicalKey: string
+  clusterHashTag: boolean
+  suffix?: string
+}) => {
+  if (!clusterHashTag) {
+    return `${prefix}:${kind}:${logicalKey}${suffix ? `:${suffix}` : ''}`
+  }
+
+  return `${prefix}:${redisHashTag(logicalKey)}:${kind}${suffix ? `:${suffix}` : ''}`
+}
+
 export const createRedisStore = (options: RedisStoreOptions = {}): RateLimitStore => {
   // Bun's built-in `RedisClient` does not yet expose `eval`/`send` in its
   // public TypeScript surface, but those methods exist (or can be polyfilled
@@ -317,7 +346,10 @@ export const createRedisStore = (options: RedisStoreOptions = {}): RateLimitStor
   const rawClient = (options.client ?? bunRedis) as RedisClientLike
   const client = normalizeRedisClient(rawClient, options.adapter ?? 'auto')
   const prefix = options.prefix ?? 'nazli'
+  const clusterHashTag = options.clusterHashTag ?? true
   const atomicSupported = !options.disableAtomicScript && typeof client.evalScript === 'function'
+  const keyFor = (kind: string, logicalKey: string, suffix?: string) =>
+    physicalKey({ prefix, kind, logicalKey, clusterHashTag, suffix })
 
   // Memoize whether the atomic path is healthy; first failure flips us to
   // multi-command for the lifetime of this store. Real Redis errors propagate
@@ -327,8 +359,8 @@ export const createRedisStore = (options: RedisStoreOptions = {}): RateLimitStor
 
   const hitMulti = async (input: StoreHitInput, now: number): Promise<HitResult> => {
     const { key, limit, window, cost, ban = 0 } = input
-    const counterKey = `${prefix}:counter:${key}`
-    const banKey = `${prefix}:ban:${key}`
+    const counterKey = keyFor('counter', key)
+    const banKey = keyFor('ban', key)
 
     const countRaw = await client.incrby(counterKey, cost)
     const count = toSafeNumber(countRaw, cost)
@@ -372,8 +404,8 @@ export const createRedisStore = (options: RedisStoreOptions = {}): RateLimitStor
 
   const hitAtomic = async (input: StoreHitInput, now: number): Promise<HitResult> => {
     const { key, limit, window, cost, ban = 0 } = input
-    const counterKey = `${prefix}:counter:${key}`
-    const banKey = `${prefix}:ban:${key}`
+    const counterKey = keyFor('counter', key)
+    const banKey = keyFor('ban', key)
 
     const raw = await client.evalScript?.(
       ATOMIC_SCRIPT,
@@ -416,8 +448,8 @@ export const createRedisStore = (options: RedisStoreOptions = {}): RateLimitStor
 
   const hitGcraAtomic = async (input: AlgorithmStoreHitInput): Promise<HitResult> => {
     const { key, limit, window, cost, ban = 0, now } = input
-    const stateKey = `${prefix}:state:${key}`
-    const banKey = `${prefix}:ban:${key}`
+    const stateKey = keyFor('state', key)
+    const banKey = keyFor('ban', key)
     const raw = await client.evalScript?.(
       GCRA_SCRIPT,
       [stateKey, banKey],
@@ -442,9 +474,9 @@ export const createRedisStore = (options: RedisStoreOptions = {}): RateLimitStor
     const { key, limit, window, cost, ban = 0, now } = input
     const windowStart = Math.floor(now / window) * window
     const previousWindowStart = windowStart - window
-    const currentKey = `${prefix}:sliding:${key}:w:${windowStart}`
-    const previousKey = `${prefix}:sliding:${key}:w:${previousWindowStart}`
-    const banKey = `${prefix}:ban:${key}`
+    const currentKey = keyFor('sliding', key, `w:${windowStart}`)
+    const previousKey = keyFor('sliding', key, `w:${previousWindowStart}`)
+    const banKey = keyFor('ban', key)
     const currentRaw = await client.incrby(currentKey, cost)
     const currentCount = toSafeNumber(currentRaw, cost)
     const currentTtl = toSafeNumber(await client.pttl(currentKey), -1)
@@ -498,15 +530,17 @@ export const createRedisStore = (options: RedisStoreOptions = {}): RateLimitStor
       try {
         return await hitGcraAtomic(input)
       } catch (err) {
-        useGcraAtomic = false
+        if (isPermanentLuaFailure(err)) {
+          useGcraAtomic = false
+        }
 
         if (Bun.env.NAZLI_DEBUG === '1') {
-          console.warn('[elysia-nazli] Redis GCRA EVAL failed, switching to state path:', err)
+          console.warn('[elysia-nazli] Redis GCRA EVAL failed, using state path:', err)
         }
       }
     }
 
-    const stateKey = `${prefix}:state:${input.key}`
+    const stateKey = keyFor('state', input.key)
     const current = await readState(stateKey, input.algorithm)
     const evaluated = evaluateAlgorithmHit(input, current)
     const ttl = Math.max(Math.ceil(evaluated.expiresAt - input.now), 1)
@@ -524,13 +558,14 @@ export const createRedisStore = (options: RedisStoreOptions = {}): RateLimitStor
         try {
           return await hitAtomic(input, now)
         } catch (err) {
-          // Permanent fall-back: if Lua is disabled on the server (NOSCRIPT,
-          // restricted commands, etc.) the multi-command path still works.
-          // Subsequent calls go straight to the fallback.
-          useAtomic = false
+          // If Lua is disabled/restricted, keep using the portable path for
+          // this store. Transient EVAL errors fall back only for this request.
+          if (isPermanentLuaFailure(err)) {
+            useAtomic = false
+          }
 
           if (Bun.env.NAZLI_DEBUG === '1') {
-            console.warn('[elysia-nazli] Redis EVAL failed, switching to multi-command path:', err)
+            console.warn('[elysia-nazli] Redis EVAL failed, using multi-command path:', err)
           }
         }
       }

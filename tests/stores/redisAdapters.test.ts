@@ -83,7 +83,7 @@ describe('redisStore adapter portability', () => {
 
     expect(evalCalls.length).toBe(1)
     expect(evalCalls[0]![1]).toBe(2)
-    expect(evalCalls[0]![2]).toBe('nazli:counter:k')
+    expect(evalCalls[0]![2]).toBe('nazli:{k}:counter')
   })
 
   it('supports node-redis sendCommand() for atomic EVAL when eval() is absent', async () => {
@@ -107,7 +107,7 @@ describe('redisStore adapter portability', () => {
     expect(commands.length).toBe(1)
     expect(commands[0]![0]).toBe('EVAL')
     expect(commands[0]![2]).toBe('2')
-    expect(commands[0]![3]).toBe('nazli:counter:k')
+    expect(commands[0]![3]).toBe('nazli:{k}:counter')
   })
 
   it('falls back to incr() when cost is one and incrby/incrBy are unavailable', async () => {
@@ -129,7 +129,7 @@ describe('redisStore adapter portability', () => {
     const result = await store.hit({ key: 'k', limit: 2, window: 1000, cost: 1, now: 1_000 })
 
     expect(result.count).toBe(1)
-    expect(counters.get('nazli:counter:k')).toBe(1)
+    expect(counters.get('nazli:{k}:counter')).toBe(1)
   })
 
   it('uses node-redis set(key, value, { PX }) shape when pSetEx is absent', async () => {
@@ -157,7 +157,7 @@ describe('redisStore adapter portability', () => {
     await store.hit({ key: 'k', limit: 1, window: 1000, cost: 1, ban: 5000, now: 1_000 })
     await store.hit({ key: 'k', limit: 1, window: 1000, cost: 1, ban: 5000, now: 1_000 })
 
-    expect(sets).toContainEqual(['nazli:ban:k', '1', { PX: 5000 }])
+    expect(sets).toContainEqual(['nazli:{k}:ban', '1', { PX: 5000 }])
   })
 
   it('throws a clear error when the client cannot increment counters', async () => {
@@ -227,7 +227,7 @@ describe('redisStore adapter portability', () => {
 
     expect(first.blocked).toBeFalse()
     expect(blocked.blocked).toBeTrue()
-    expect(calls.some((call) => call.name === 'pSetEx' && call.key === 'p:state:k')).toBeTrue()
+    expect(calls.some((call) => call.name === 'pSetEx' && call.key === 'p:{k}:state')).toBeTrue()
   })
 
   it('uses Redis counters for sliding-window algorithm state', async () => {
@@ -292,7 +292,7 @@ describe('redisStore adapter portability', () => {
     })
 
     expect(boundary.blocked).toBeTrue()
-    expect(ttls.get('p:sliding:k:w:0')).toBe(2000)
+    expect(ttls.get('p:{k}:sliding:w:0')).toBe(2000)
   })
 
   it('uses Lua for GCRA when eval is available', async () => {
@@ -321,7 +321,7 @@ describe('redisStore adapter portability', () => {
 
     expect(result.blocked).toBeFalse()
     expect(evalCalls.length).toBe(1)
-    expect(evalCalls[0]!.keys).toEqual(['p:state:k', 'p:ban:k'])
+    expect(evalCalls[0]!.keys).toEqual(['p:{k}:state', 'p:{k}:ban'])
     expect(evalCalls[0]!.args).toEqual([1, 2, 1000, 0, 1_000])
   })
 })
