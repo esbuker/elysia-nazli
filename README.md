@@ -124,6 +124,7 @@ The `/login` route must pass both the global rule and the route rule.
 
 ### Keep limits beside routes
 
+<!-- prettier-ignore-start -->
 ```ts
 import { Elysia } from 'elysia'
 import { rateLimit } from 'elysia-nazli'
@@ -138,6 +139,7 @@ const app = new Elysia()
     },
   })
 ```
+<!-- prettier-ignore-end -->
 
 Use route options when local readability matters. Use plugin-level `routes` when you want early `onRequest` limiting, object maps, `RegExp` paths, or several matching rules evaluated together.
 
