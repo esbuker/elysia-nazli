@@ -9,6 +9,7 @@ import type {
 } from '../types'
 import {
   ensureValidRule,
+  isHttpMethod,
   normalizeMethodSet,
   normalizePrefix,
   parseDuration,
@@ -23,18 +24,6 @@ const registerId = (seen: Set<string>, id: string) => {
   }
   seen.add(id)
 }
-
-const HTTP_METHODS = new Set([
-  'GET',
-  'POST',
-  'PUT',
-  'PATCH',
-  'DELETE',
-  'OPTIONS',
-  'HEAD',
-  'TRACE',
-  'CONNECT',
-])
 
 const ALGORITHMS = new Set<RateLimitAlgorithm>([
   'fixed-window',
@@ -181,6 +170,7 @@ const normalizeRuleConfig = (id: string, rule: RuleConfig): NormalizedRuleConfig
     store: rule.store,
     key: rule.key,
     method: rule.method,
+    onStoreError: rule.onStoreError,
     skip: rule.skip,
     standardHeaders: headers.standardHeaders,
     legacyHeaders: headers.legacyHeaders,
@@ -226,7 +216,13 @@ const parseRouteMapKey = (key: string): ParsedRouteMapKey => {
 
   const method = upper(rawMethod)
 
-  if (!HTTP_METHODS.has(method)) {
+  if (!isHttpMethod(method)) {
+    if (rawPath.trim().startsWith('/')) {
+      throw new Error(
+        `Invalid route rule "${key}": method must be a valid HTTP method when using "METHOD /path" syntax`,
+      )
+    }
+
     return { path: trimmed }
   }
 
@@ -284,7 +280,7 @@ export const compileRules = (options: RateLimitPluginOptions): CompiledRule[] =>
       ...rule,
       id,
       type: 'global',
-      methodSet: normalizeMethodSet(rule.method),
+      methodSet: normalizeMethodSet(rule.method, `"${id}" method`),
     })
   }
 
@@ -312,7 +308,7 @@ export const compileRules = (options: RateLimitPluginOptions): CompiledRule[] =>
       id,
       type: 'prefix',
       prefix: normalizePrefix(trimmedPrefix),
-      methodSet: normalizeMethodSet(normalizedRule.method),
+      methodSet: normalizeMethodSet(normalizedRule.method, `"${id}" method`),
     })
   }
 
@@ -338,7 +334,7 @@ export const compileRules = (options: RateLimitPluginOptions): CompiledRule[] =>
       id,
       type: 'route',
       path: rule.path,
-      methodSet: normalizeMethodSet(normalizedRule.method),
+      methodSet: normalizeMethodSet(normalizedRule.method, `"${id}" method`),
     })
   }
 

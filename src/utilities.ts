@@ -4,14 +4,42 @@ export const upper = (value: string) => value.toUpperCase()
 
 export const firstForwardedIp = (value: string | null) => value?.split(',')[0]?.trim()
 
-export const normalizeMethodSet = (method?: string | string[]): Set<string> | undefined => {
+export const HTTP_METHODS = new Set([
+  'GET',
+  'POST',
+  'PUT',
+  'PATCH',
+  'DELETE',
+  'OPTIONS',
+  'HEAD',
+  'TRACE',
+  'CONNECT',
+])
+
+export const isHttpMethod = (method: string) => HTTP_METHODS.has(upper(method))
+
+const methodList = () => [...HTTP_METHODS].join(', ')
+
+export const normalizeMethodSet = (
+  method?: string | string[],
+  label = 'method',
+): Set<string> | undefined => {
   if (!method) {
     return undefined
   }
 
   const methods = Array.isArray(method) ? method : [method]
+  const normalized = methods.map(upper)
 
-  return new Set(methods.map(upper))
+  for (const value of normalized) {
+    if (!HTTP_METHODS.has(value)) {
+      throw new Error(
+        `Invalid rate limit ${label}: method must be one of ${methodList()}; received "${value}"`,
+      )
+    }
+  }
+
+  return new Set(normalized)
 }
 
 export const normalizePrefix = (prefix: string) => {
@@ -55,11 +83,16 @@ const durationError = (label: string) => {
 }
 
 export const parseDuration = (value: RateLimitDuration, label = 'duration') => {
-  if (typeof value === 'number') {
-    return value
+  const parsed = typeof value === 'number' ? value : parseDurationString(value.trim(), label)
+
+  if (!Number.isInteger(parsed)) {
+    throw new Error(`Invalid rate limit ${label}: duration must resolve to whole milliseconds`)
   }
 
-  const input = value.trim()
+  return parsed
+}
+
+const parseDurationString = (input: string, label: string) => {
   const match = /^(\d+(?:\.\d+)?)\s*([a-zA-Z]+)$/.exec(input)
 
   if (!match) {
@@ -91,16 +124,16 @@ export const ensureValidRule = (
     throw new Error(`Invalid rule "${id}": limit must be a positive integer`)
   }
 
-  if (!Number.isFinite(rule.window) || rule.window <= 0) {
-    throw new Error(`Invalid rule "${id}": window must be > 0`)
+  if (!Number.isInteger(rule.window) || rule.window <= 0) {
+    throw new Error(`Invalid rule "${id}": window must be a positive integer`)
   }
 
   if (rule.cost !== undefined && (!Number.isInteger(rule.cost) || rule.cost <= 0)) {
     throw new Error(`Invalid rule "${id}": cost must be a positive integer`)
   }
 
-  if (rule.ban !== undefined && (!Number.isFinite(rule.ban) || rule.ban < 0)) {
-    throw new Error(`Invalid rule "${id}": ban must be >= 0`)
+  if (rule.ban !== undefined && (!Number.isInteger(rule.ban) || rule.ban < 0)) {
+    throw new Error(`Invalid rule "${id}": ban must be a non-negative integer`)
   }
 }
 
@@ -122,6 +155,12 @@ export const methodMatches = (method: string, methodSet?: Set<string>) => {
   }
 
   return methodSet.has(method)
+}
+
+export const sha256Hex = (value: string) => {
+  const hasher = new Bun.CryptoHasher('sha256')
+
+  return hasher.update(value).digest('hex')
 }
 
 export const shouldUseHeaderFamily = (

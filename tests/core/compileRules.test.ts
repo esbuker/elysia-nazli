@@ -147,14 +147,24 @@ describe('compileRules', () => {
     expect(status.methodSet).toBeUndefined()
   })
 
-  it('treats unknown route-map method prefixes as part of the path', () => {
+  it('rejects invalid route-map method prefixes before slash paths', () => {
+    expect(() =>
+      compileRules({
+        routes: {
+          'BREW /coffee': { limit: 3, window: '1m' },
+        },
+      }),
+    ).toThrow(/method must be a valid HTTP method/)
+  })
+
+  it('still treats non-method route-map keys as paths', () => {
     const rules = compileRules({
       routes: {
-        'BREW /coffee': { limit: 3, window: '1m' },
+        'custom path label': { limit: 3, window: '1m' },
       },
     })
 
-    expect(rules[0]!.path).toBe('BREW /coffee')
+    expect(rules[0]!.path).toBe('custom path label')
     expect(rules[0]!.methodSet).toBeUndefined()
   })
 
@@ -188,6 +198,26 @@ describe('compileRules', () => {
 
     expect(rules[0]!.methodSet?.has('GET')).toBeTrue()
     expect(rules[0]!.methodSet?.has('POST')).toBeTrue()
+  })
+
+  it('rejects invalid configured methods', () => {
+    expect(() =>
+      compileRules({
+        global: { limit: 1, window: 1000, method: 'POSTT' as never },
+      }),
+    ).toThrow(/Invalid rate limit "global" method/)
+
+    expect(() =>
+      compileRules({
+        prefixes: [{ prefix: '/auth', limit: 1, window: 1000, method: ['GET', 'FETCH'] as never }],
+      }),
+    ).toThrow(/Invalid rate limit "prefix:\/auth:0" method/)
+
+    expect(() =>
+      compileRules({
+        routes: [{ path: '/login', limit: 1, window: 1000, method: 'LOGIN' as never }],
+      }),
+    ).toThrow(/Invalid rate limit "route:\/login:0" method/)
   })
 
   it('throws on duplicate rule ids across global / prefixes / routes', () => {

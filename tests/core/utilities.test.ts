@@ -138,6 +138,11 @@ describe('parseDuration', () => {
     expect(parseDuration('2 hours')).toBe(2 * 60 * 60_000)
   })
 
+  it('rejects durations that do not resolve to whole milliseconds', () => {
+    expect(() => parseDuration(0.5)).toThrow(/whole milliseconds/)
+    expect(() => parseDuration('0.5ms')).toThrow(/whole milliseconds/)
+  })
+
   it('rejects ambiguous duration strings', () => {
     expect(() => parseDuration('60')).toThrow(/duration string/)
     expect(() => parseDuration('1fortnight')).toThrow(/duration string/)
@@ -162,6 +167,7 @@ describe('ensureValidRule', () => {
   it('rejects non-positive or non-finite window', () => {
     expect(() => ensureValidRule('r', { limit: 1, window: 0 })).toThrow(/window/)
     expect(() => ensureValidRule('r', { limit: 1, window: -1 })).toThrow(/window/)
+    expect(() => ensureValidRule('r', { limit: 1, window: 1.5 })).toThrow(/window/)
     expect(() => ensureValidRule('r', { limit: 1, window: NaN })).toThrow(/window/)
   })
 
@@ -174,6 +180,7 @@ describe('ensureValidRule', () => {
 
   it('rejects negative ban but allows zero', () => {
     expect(() => ensureValidRule('r', { limit: 1, window: 1000, ban: -1 })).toThrow(/ban/)
+    expect(() => ensureValidRule('r', { limit: 1, window: 1000, ban: 1.5 })).toThrow(/ban/)
     expect(() => ensureValidRule('r', { limit: 1, window: 1000, ban: 0 })).not.toThrow()
   })
 })
