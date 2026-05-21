@@ -9,34 +9,25 @@ import {
   setRateLimitHeaders,
 } from './core/responseHeaders'
 import { getActiveRules } from './core/ruleMatcher'
-import { buildStore, ruleStoreCacheKey, type RuleStoreCacheKey } from './core/storeFactory'
+import { createStoreRegistry } from './core/storeRegistry'
 import { MemoryRateLimitStore, type MemoryStoreOptions } from './plugins/memoryStore'
 import type {
   CompiledRule,
   MemoryStoreConfig,
   RateLimitDecision,
-  RateLimitHeaderOptions,
   RateLimitPluginOptions,
   RateLimitRouteMacroConfig,
   RateLimitStore,
-  RateLimitStoreConfig,
   RuleMatchContext,
 } from './types'
-import { parseDuration, pickHeaderDecision, upper } from './utilities'
+import {
+  normalizeStandardHeaderOption,
+  parseDuration,
+  pickHeaderDecision,
+  upper,
+} from './utilities'
 
 let nextPluginSeed = 0
-
-const normalizeStandardHeaders = (
-  value: RateLimitHeaderOptions['standard'],
-): boolean | undefined => {
-  if (value === undefined) return undefined
-
-  if (typeof value === 'boolean') return value
-
-  if (value === 'draft-7') return true
-
-  throw new Error('rateLimit: headers.standard must be boolean or "draft-7"')
-}
 
 const resolvePluginHeaders = (options: RateLimitPluginOptions) => {
   if (
@@ -56,7 +47,11 @@ const resolvePluginHeaders = (options: RateLimitPluginOptions) => {
   }
 
   return {
-    enableStandardHeaders: normalizeStandardHeaders(options.headers.standard) ?? true,
+    enableStandardHeaders:
+      normalizeStandardHeaderOption(
+        options.headers.standard,
+        'rateLimit: headers.standard must be boolean or "draft-7"',
+      ) ?? true,
     enableLegacyHeaders: options.headers.legacy ?? false,
   }
 }
@@ -128,57 +123,13 @@ export const rateLimit = (options: RateLimitPluginOptions = {}) => {
     throw new Error('rateLimit: maxKeyLength must be a positive integer when provided')
   }
 
-  const resolveFallbackStore = (): RateLimitStore | undefined => {
-    const fallbackStore = options.fallbackStore
-
-    if (fallbackStore === undefined || fallbackStore === false) {
-      return undefined
-    }
-
-    if (fallbackStore === true) {
-      return new MemoryRateLimitStore()
-    }
-
-    return buildStore(fallbackStore)
-  }
-
-  const fallbackRateLimitStore = resolveFallbackStore()
-
-  const storeCache = new Map<RuleStoreCacheKey, RateLimitStore>()
-  const activeStores = new Set<RateLimitStore>()
-  const cleanupTimers = new Map<RateLimitStore, ReturnType<typeof setInterval>>()
-
-  if (fallbackRateLimitStore) {
-    activeStores.add(fallbackRateLimitStore)
-
-    if (typeof fallbackRateLimitStore.cleanup === 'function' && cleanupInterval > 0) {
-      const timer = setInterval(() => fallbackRateLimitStore.cleanup?.(Date.now()), cleanupInterval)
-
-      cleanupTimers.set(fallbackRateLimitStore, timer)
-    }
-  }
-
-  const getStore = (storeConfig?: RateLimitStoreConfig) => {
-    const cacheKey = ruleStoreCacheKey(storeConfig)
-    const cached = storeCache.get(cacheKey)
-
-    if (cached) {
-      return cached
-    }
-
-    const nextStore = buildStore(storeConfig ?? options.store)
-
-    storeCache.set(cacheKey, nextStore)
-    activeStores.add(nextStore)
-
-    if (typeof nextStore.cleanup === 'function' && cleanupInterval > 0) {
-      const timer = setInterval(() => nextStore.cleanup?.(Date.now()), cleanupInterval)
-
-      cleanupTimers.set(nextStore, timer)
-    }
-
-    return nextStore
-  }
+  const storeRegistry = createStoreRegistry({
+    cleanupInterval,
+    defaultStore: options.store,
+    fallbackStore: options.fallbackStore,
+  })
+  const getStore = storeRegistry.getStore
+  const fallbackRateLimitStore = storeRegistry.fallbackStore
 
   const ruleStores = new Map<string, RateLimitStore>()
   const ensureAlgorithmSupport = (rule: CompiledRule, store: RateLimitStore, label: string) => {
@@ -460,19 +411,11 @@ export const rateLimit = (options: RateLimitPluginOptions = {}) => {
       }
     })
     .onStop(() => {
-      for (const timer of cleanupTimers.values()) {
-        clearInterval(timer)
-      }
-
-      for (const store of activeStores.values()) {
-        store.close?.()
-      }
+      storeRegistry.close()
     })
 }
 
 export type {
-  BunRedisClientLike,
-  BunRedisStoreOptions,
   CompiledRule,
   HitResult,
   AlgorithmStoreHitInput,

@@ -143,6 +143,37 @@ const callStore = async (
   return callPromise
 }
 
+const malformedHitError = (value: unknown, rule: CompiledRule, attempt: 'primary' | 'fallback') => {
+  const fallbackLabel = attempt === 'fallback' ? ' (fallback)' : ''
+
+  return new Error(
+    value === undefined || value === null
+      ? `Rate limit store hit() resolved without a HitResult${fallbackLabel} for rule "${rule.id}"`
+      : `Rate limit store hit() returned malformed HitResult${fallbackLabel} for rule "${rule.id}"`,
+  )
+}
+
+const tryStoreHit = async (
+  store: RateLimitStore,
+  input: StoreHitInput,
+  rule: CompiledRule,
+  storeTimeout: number | undefined,
+  attempt: 'primary' | 'fallback',
+): Promise<{ hit?: HitResult; error?: unknown; latency: number }> => {
+  const started = performance.now()
+
+  try {
+    const raw = await callStore(store, input, rule, storeTimeout)
+
+    return {
+      ...(isLikelyHitResult(raw) ? { hit: raw } : { error: malformedHitError(raw, rule, attempt) }),
+      latency: performance.now() - started,
+    }
+  } catch (error) {
+    return { error, latency: performance.now() - started }
+  }
+}
+
 export const evaluateDecisions = async ({
   activeRules,
   context,
@@ -211,71 +242,34 @@ export const evaluateDecisions = async ({
       now,
     }
 
-    const tryPrimaryAt = performance.now()
-    let hit: HitResult | undefined
-    let primaryError: unknown
+    const primaryResult = await tryStoreHit(primary, hitInput, rule, storeTimeout, 'primary')
+    let hit = primaryResult.hit
 
-    try {
-      const raw = await callStore(primary, hitInput, rule, storeTimeout)
-
-      if (!isLikelyHitResult(raw)) {
-        primaryError = new Error(
-          raw === undefined || raw === null
-            ? `Rate limit store hit() resolved without a HitResult for rule "${rule.id}"`
-            : `Rate limit store hit() returned malformed HitResult for rule "${rule.id}"`,
-        )
-      } else {
-        hit = raw
-      }
-    } catch (err) {
-      primaryError = err
-    }
-
-    storeLatency += performance.now() - tryPrimaryAt
+    storeLatency += primaryResult.latency
 
     if (!hit && fallbackStore && fallbackStore !== primary) {
-      const tryFbAt = performance.now()
+      const fallbackResult = await tryStoreHit(
+        fallbackStore,
+        hitInput,
+        rule,
+        storeTimeout,
+        'fallback',
+      )
 
-      try {
-        const rawFb = await callStore(fallbackStore, hitInput, rule, storeTimeout)
+      storeLatency += fallbackResult.latency
 
-        if (!isLikelyHitResult(rawFb)) {
-          storeLatency += performance.now() - tryFbAt
-
-          await applyStoreErrorPolicy(
-            {
-              onStoreError: rule.onStoreError ?? onStoreError,
-              context,
-              rule,
-              key,
-              error: new Error(
-                rawFb === undefined || rawFb === null
-                  ? `Rate limit store hit() resolved without a HitResult (fallback) for rule "${rule.id}"`
-                  : `Rate limit store hit() returned malformed HitResult (fallback) for rule "${rule.id}"`,
-              ),
-              attempt: 'fallback',
-              primaryError,
-            },
-            decisions,
-            now,
-          )
-
-          continue
-        }
-
-        hit = rawFb
-      } catch (fallbackError) {
-        storeLatency += performance.now() - tryFbAt
-
+      if (fallbackResult.hit) {
+        hit = fallbackResult.hit
+      } else {
         await applyStoreErrorPolicy(
           {
             onStoreError: rule.onStoreError ?? onStoreError,
             context,
             rule,
             key,
-            error: fallbackError,
+            error: fallbackResult.error,
             attempt: 'fallback',
-            primaryError,
+            primaryError: primaryResult.error,
           },
           decisions,
           now,
@@ -283,8 +277,6 @@ export const evaluateDecisions = async ({
 
         continue
       }
-
-      storeLatency += performance.now() - tryFbAt
     }
 
     if (hit) {
@@ -299,7 +291,7 @@ export const evaluateDecisions = async ({
         context,
         rule,
         key,
-        error: primaryError,
+        error: primaryResult.error,
         attempt: 'primary',
       },
       decisions,

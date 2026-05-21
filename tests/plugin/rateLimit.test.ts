@@ -4,7 +4,7 @@ import { Elysia } from 'elysia'
 import { bodyField, MemoryRateLimitStore, rateLimit } from '../../src/index'
 import { redisStore } from '../../src/redis'
 import { sqliteStore } from '../../src/sqlite'
-import type { BunRedisClientLike, HitResult, RateLimitStore, StoreHitInput } from '../../src/index'
+import type { RedisClientLike, HitResult, RateLimitStore, StoreHitInput } from '../../src/index'
 
 const TEST_IP = '203.0.113.10'
 
@@ -109,7 +109,7 @@ describe('redisStore', () => {
     const counter = new Map<string, number>()
     const expiry = new Map<string, number>()
 
-    const client: BunRedisClientLike = {
+    const client: RedisClientLike = {
       incrby: async (key, value) => {
         const next = (counter.get(key) ?? 0) + value
 

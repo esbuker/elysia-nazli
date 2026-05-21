@@ -1,4 +1,8 @@
-import { evaluateAlgorithmHit, type StoredAlgorithmState } from '../core/algorithms'
+import {
+  evaluateAlgorithmHit,
+  evaluateFixedWindowHit,
+  type StoredAlgorithmState,
+} from '../core/algorithms'
 import type {
   AlgorithmStoreHitInput,
   HitResult,
@@ -35,59 +39,19 @@ export class MemoryRateLimitStore implements RateLimitStore {
   }
 
   hit(input: StoreHitInput): HitResult {
-    const { key, limit, window, cost, ban = 0, now } = input
-    const previousRecord = this.map.get(key)
-    const previousResetAt = previousRecord?.resetAt ?? 0
-    let next: MemoryRecord & { count: number; resetAt: number; banUntil: number }
-
-    if (!previousRecord || previousResetAt <= now) {
-      let activeBan = 0
-
-      if (previousRecord?.banUntil && previousRecord.banUntil > now) {
-        activeBan = previousRecord.banUntil
-      }
-
-      next = {
-        count: cost,
-        resetAt: now + window,
-        banUntil: activeBan,
-      }
-    } else {
-      next = {
-        count: (previousRecord.count ?? 0) + cost,
-        resetAt: previousResetAt,
-        banUntil: previousRecord.banUntil ?? 0,
-      }
-    }
-
-    if (next.count > limit && ban > 0 && next.banUntil <= now) {
-      next.banUntil = now + ban
-    }
+    const previousRecord = this.map.get(input.key)
+    const evaluated = evaluateFixedWindowHit(input, previousRecord ?? null)
 
     // Maintain insertion-order recency: re-insert moves to the end.
     if (previousRecord) {
-      this.map.delete(key)
+      this.map.delete(input.key)
     }
 
-    this.map.set(key, next)
+    this.map.set(input.key, evaluated.state)
 
-    if (this.maxEntries > 0 && this.map.size > this.maxEntries) {
-      this.evictDown(now)
-    }
+    this.evictIfNeeded(input.now)
 
-    const blocked = next.banUntil > now || next.count > limit
-    const retryAfter = blocked ? Math.max(next.resetAt, next.banUntil) - now : 0
-
-    return {
-      key,
-      count: next.count,
-      remaining: Math.max(limit - next.count, 0),
-      limit,
-      resetAt: next.resetAt,
-      blocked,
-      retryAfter,
-      banUntil: next.banUntil || undefined,
-    }
+    return evaluated.hit
   }
 
   algorithmHit(input: AlgorithmStoreHitInput): HitResult {
@@ -108,9 +72,7 @@ export class MemoryRateLimitStore implements RateLimitStore {
 
     this.map.set(input.key, next)
 
-    if (this.maxEntries > 0 && this.map.size > this.maxEntries) {
-      this.evictDown(input.now)
-    }
+    this.evictIfNeeded(input.now)
 
     return evaluated.hit
   }
@@ -128,6 +90,12 @@ export class MemoryRateLimitStore implements RateLimitStore {
   /** Returns the current number of tracked keys. Intended for tests/diagnostics. */
   size(): number {
     return this.map.size
+  }
+
+  private evictIfNeeded(now: number): void {
+    if (this.maxEntries > 0 && this.map.size > this.maxEntries) {
+      this.evictDown(now)
+    }
   }
 
   private evictDown(now: number): void {

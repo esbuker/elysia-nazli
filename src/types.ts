@@ -181,12 +181,6 @@ export interface RedisStoreOptions {
   disableAtomicScript?: boolean
 }
 
-/** @deprecated Use `RedisClientLike` instead. */
-export type BunRedisClientLike = RedisClientLike
-
-/** @deprecated Use `RedisStoreOptions` instead. */
-export type BunRedisStoreOptions = RedisStoreOptions
-
 export interface RateLimitDecision {
   ruleId: string
   key: string

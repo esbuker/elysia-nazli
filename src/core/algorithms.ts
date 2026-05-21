@@ -1,4 +1,11 @@
-import type { AlgorithmStoreHitInput, HitResult, RateLimitAlgorithm } from '../types'
+import type { AlgorithmStoreHitInput, HitResult, RateLimitAlgorithm, StoreHitInput } from '../types'
+
+export interface FixedWindowState {
+  count?: number
+  resetAt?: number
+  banUntil?: number
+  [key: string]: unknown
+}
 
 export interface StoredAlgorithmState {
   algorithm: RateLimitAlgorithm
@@ -12,10 +19,22 @@ export interface AlgorithmHitEvaluation {
   expiresAt: number
 }
 
+export interface FixedWindowHitEvaluation {
+  hit: HitResult
+  state: FixedWindowState & {
+    count: number
+    resetAt: number
+  }
+  expiresAt: number
+}
+
+type HitResultValues = Pick<HitResult, 'count' | 'resetAt' | 'blocked' | 'retryAfter'> &
+  Partial<Pick<HitResult, 'remaining' | 'banUntil'>>
+
 const asNumber = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isFinite(value) ? value : undefined
 
-const activeBanUntil = (state: StoredAlgorithmState | null, now: number) => {
+const activeBanUntil = (state: FixedWindowState | StoredAlgorithmState | null, now: number) => {
   const banUntil = asNumber(state?.banUntil)
 
   return banUntil !== undefined && banUntil > now ? banUntil : 0
@@ -23,15 +42,34 @@ const activeBanUntil = (state: StoredAlgorithmState | null, now: number) => {
 
 const expiryFor = (resetAt: number, banUntil: number) => Math.max(resetAt, banUntil || 0)
 
-const fixedWindowHit = (
-  input: AlgorithmStoreHitInput,
-  current: StoredAlgorithmState | null,
-): AlgorithmHitEvaluation => {
-  const { key, limit, window, cost, ban = 0, now } = input
-  const sameState = current?.algorithm === 'fixed-window' ? current : null
-  const previousResetAt = asNumber(sameState?.resetAt)
-  const previousCount = asNumber(sameState?.count)
-  const previousBanUntil = activeBanUntil(sameState, now)
+const withBanUntil = <T extends { banUntil?: number }>(state: T, banUntil: number): T => {
+  if (banUntil > 0) state.banUntil = banUntil
+
+  return state
+}
+
+export const createHitResult = (
+  input: Pick<StoreHitInput, 'key' | 'limit'>,
+  values: HitResultValues,
+): HitResult => ({
+  key: input.key,
+  count: values.count,
+  remaining: values.remaining ?? Math.max(input.limit - values.count, 0),
+  limit: input.limit,
+  resetAt: values.resetAt,
+  blocked: values.blocked,
+  retryAfter: values.retryAfter,
+  ...(values.banUntil ? { banUntil: values.banUntil } : {}),
+})
+
+export const evaluateFixedWindowHit = (
+  input: StoreHitInput,
+  current: FixedWindowState | null,
+): FixedWindowHitEvaluation => {
+  const { limit, window, cost, ban = 0, now } = input
+  const previousResetAt = asNumber(current?.resetAt)
+  const previousCount = asNumber(current?.count)
+  const previousBanUntil = activeBanUntil(current, now)
   let count: number
   let resetAt: number
   let banUntil = previousBanUntil
@@ -50,22 +88,27 @@ const fixedWindowHit = (
 
   const blocked = banUntil > now || count > limit
   const retryAfter = blocked ? Math.max(resetAt, banUntil) - now : 0
-  const state: StoredAlgorithmState = { algorithm: 'fixed-window', count, resetAt }
-
-  if (banUntil > 0) state.banUntil = banUntil
+  const state = withBanUntil<FixedWindowHitEvaluation['state']>({ count, resetAt }, banUntil)
 
   return {
     state,
     expiresAt: expiryFor(resetAt, banUntil),
-    hit: {
-      key,
-      count,
-      remaining: Math.max(limit - count, 0),
-      limit,
-      resetAt,
-      blocked,
-      retryAfter,
-      banUntil: banUntil || undefined,
+    hit: createHitResult(input, { count, resetAt, blocked, retryAfter, banUntil }),
+  }
+}
+
+const fixedWindowHit = (
+  input: AlgorithmStoreHitInput,
+  current: StoredAlgorithmState | null,
+): AlgorithmHitEvaluation => {
+  const sameState = current?.algorithm === 'fixed-window' ? current : null
+  const evaluated = evaluateFixedWindowHit(input, sameState)
+
+  return {
+    ...evaluated,
+    state: {
+      algorithm: 'fixed-window',
+      ...evaluated.state,
     },
   }
 }
@@ -74,7 +117,7 @@ const slidingWindowHit = (
   input: AlgorithmStoreHitInput,
   current: StoredAlgorithmState | null,
 ): AlgorithmHitEvaluation => {
-  const { key, limit, window, cost, ban = 0, now } = input
+  const { limit, window, cost, ban = 0, now } = input
   const sameState = current?.algorithm === 'sliding-window' ? current : null
   const windowStart = Math.floor(now / window) * window
   const resetAt = windowStart + window
@@ -102,28 +145,15 @@ const slidingWindowHit = (
 
   const blocked = banUntil > now || estimated > limit
   const retryAfter = blocked ? Math.max(resetAt, banUntil) - now : 0
-  const state: StoredAlgorithmState = {
-    algorithm: 'sliding-window',
-    previousCount,
-    currentCount,
-    windowStart,
-  }
-
-  if (banUntil > 0) state.banUntil = banUntil
+  const state = withBanUntil<StoredAlgorithmState>(
+    { algorithm: 'sliding-window', previousCount, currentCount, windowStart },
+    banUntil,
+  )
 
   return {
     state,
     expiresAt: expiryFor(windowStart + window * 2, banUntil),
-    hit: {
-      key,
-      count: estimated,
-      remaining: Math.max(limit - estimated, 0),
-      limit,
-      resetAt,
-      blocked,
-      retryAfter,
-      banUntil: banUntil || undefined,
-    },
+    hit: createHitResult(input, { count: estimated, resetAt, blocked, retryAfter, banUntil }),
   }
 }
 
@@ -131,7 +161,7 @@ const tokenBucketHit = (
   input: AlgorithmStoreHitInput,
   current: StoredAlgorithmState | null,
 ): AlgorithmHitEvaluation => {
-  const { key, limit, window, cost, ban = 0, now } = input
+  const { limit, window, cost, ban = 0, now } = input
   const sameState = current?.algorithm === 'token-bucket' ? current : null
   const ratePerMs = limit / window
   const previousTokens = asNumber(sameState?.tokens) ?? limit
@@ -158,27 +188,22 @@ const tokenBucketHit = (
   const resetAt = now + Math.ceil((limit - tokens) / ratePerMs)
   const blocked = banUntil > now || blockedByLimit
   const retryAfter = blocked ? Math.max(refillMs, banUntil > now ? banUntil - now : 0) : 0
-  const state: StoredAlgorithmState = {
-    algorithm: 'token-bucket',
-    tokens,
-    updatedAt: now,
-  }
-
-  if (banUntil > 0) state.banUntil = banUntil
+  const state = withBanUntil<StoredAlgorithmState>(
+    { algorithm: 'token-bucket', tokens, updatedAt: now },
+    banUntil,
+  )
 
   return {
     state,
     expiresAt: expiryFor(resetAt, banUntil),
-    hit: {
-      key,
+    hit: createHitResult(input, {
       count: Math.max(0, Math.ceil(limit - tokens)),
       remaining: Math.max(Math.floor(tokens), 0),
-      limit,
       resetAt,
       blocked,
       retryAfter,
       banUntil: banUntil || undefined,
-    },
+    }),
   }
 }
 
@@ -186,7 +211,7 @@ const gcraHit = (
   input: AlgorithmStoreHitInput,
   current: StoredAlgorithmState | null,
 ): AlgorithmHitEvaluation => {
-  const { key, limit, window, cost, ban = 0, now } = input
+  const { limit, window, cost, ban = 0, now } = input
   const sameState = current?.algorithm === 'gcra' ? current : null
   const emissionInterval = window / limit
   const burstOffset = emissionInterval * limit
@@ -219,23 +244,19 @@ const gcraHit = (
   const resetAt = now + Math.ceil(usedBurst)
   const blocked = banUntil > now || blockedByLimit
   const retryAfter = blocked ? Math.max(retryAfterForLimit, banUntil > now ? banUntil - now : 0) : 0
-  const state: StoredAlgorithmState = { algorithm: 'gcra', tat }
-
-  if (banUntil > 0) state.banUntil = banUntil
+  const state = withBanUntil<StoredAlgorithmState>({ algorithm: 'gcra', tat }, banUntil)
 
   return {
     state,
     expiresAt: expiryFor(now + Math.ceil(burstOffset + usedBurst), banUntil),
-    hit: {
-      key,
+    hit: createHitResult(input, {
       count: Math.max(0, limit - remaining),
       remaining,
-      limit,
       resetAt,
       blocked,
       retryAfter,
       banUntil: banUntil || undefined,
-    },
+    }),
   }
 }
 

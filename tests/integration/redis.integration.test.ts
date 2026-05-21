@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'bun:test'
 import { RedisClient } from 'bun'
 
-import { createBunRedisStore } from '../../src/plugins/redisStore'
-import type { BunRedisClientLike } from '../../src/types'
+import { createRedisStore } from '../../src/plugins/redisStore'
+import type { RedisClientLike } from '../../src/types'
 
 type Backend = {
   name: string
@@ -77,15 +77,15 @@ const withStore = async (
   backend: ProbedBackend,
   prefixName: string,
   options: { disableAtomicScript?: boolean },
-  run: (store: ReturnType<typeof createBunRedisStore>) => Promise<void>,
+  run: (store: ReturnType<typeof createRedisStore>) => Promise<void>,
 ) => {
   const client = new RedisClient(backend.uri, REDIS_CLIENT_OPTIONS)
 
   await client.connect()
 
   try {
-    const store = createBunRedisStore({
-      client: client as BunRedisClientLike,
+    const store = createRedisStore({
+      client: client as RedisClientLike,
       prefix: uniquePrefix(backend, prefixName),
       ...options,
     })

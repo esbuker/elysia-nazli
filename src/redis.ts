@@ -33,6 +33,6 @@ export const redisStore = (
   return createRedisStore(clientOrOptions)
 }
 
-export { createBunRedisStore, createRedisStore } from './plugins/redisStore'
+export { createRedisStore } from './plugins/redisStore'
 
 export type { RedisAdapterMode, RedisClientLike, RedisStoreOptions } from './types'

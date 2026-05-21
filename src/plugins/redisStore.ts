@@ -1,272 +1,21 @@
 import { redis as bunRedis } from 'bun'
 
-import { evaluateAlgorithmHit, type StoredAlgorithmState } from '../core/algorithms'
+import {
+  createHitResult,
+  evaluateAlgorithmHit,
+  type StoredAlgorithmState,
+} from '../core/algorithms'
 import { toSafeNumber } from '../core/toSafeNumber'
 import type {
   AlgorithmStoreHitInput,
   HitResult,
   RateLimitStore,
-  RedisAdapterMode,
   RedisClientLike,
   RedisStoreOptions,
   StoreHitInput,
 } from '../types'
-
-interface NormalizedRedisClient {
-  get(key: string): Promise<unknown>
-  incrby(key: string, value: number): Promise<unknown>
-  pexpire(key: string, milliseconds: number): Promise<unknown>
-  pttl(key: string): Promise<unknown>
-  psetex(key: string, milliseconds: number, value: string): Promise<unknown>
-  evalScript?(script: string, keys: string[], args: (string | number)[]): Promise<unknown>
-}
-
-/**
- * Atomic rate-limit Lua script.
- *
- * Inputs:
- *   KEYS[1] = counter key
- *   KEYS[2] = ban key
- *   ARGV[1] = cost (integer ≥ 1)
- *   ARGV[2] = limit (integer ≥ 1)
- *   ARGV[3] = window (integer ≥ 1)
- *   ARGV[4] = ban (integer ≥ 0; 0 disables ban arming)
- *
- * Output: array of 3 numbers
- *   [count, windowTtl, banTtl]
- *
- * Semantics:
- *   1. INCRBY counter cost
- *   2. If this is the first hit (count == cost) OR the key has no TTL, set
- *      PEXPIRE to window. This guards against TTL drift after server
- *      crashes between INCR and PEXPIRE.
- *   3. If ban > 0 and count > limit and no ban is active, PSETEX a fresh
- *      ban window.
- *   4. Read both TTLs and return them.
- *
- * The script is idempotent and safe to run on a Redis cluster when related
- * keys share the same hash tag. The store applies that hash tag by default.
- */
-const ATOMIC_SCRIPT = `
-local counterKey = KEYS[1]
-local banKey = KEYS[2]
-local cost = tonumber(ARGV[1])
-local limit = tonumber(ARGV[2])
-local window = tonumber(ARGV[3])
-local ban = tonumber(ARGV[4])
-
-local count = redis.call('INCRBY', counterKey, cost)
-local ttl = redis.call('PTTL', counterKey)
-if count == cost or ttl < 0 then
-  redis.call('PEXPIRE', counterKey, window)
-  ttl = window
-end
-
-local banTtl = 0
-if ban > 0 then
-  banTtl = redis.call('PTTL', banKey)
-  if banTtl < 0 then banTtl = 0 end
-  if count > limit and banTtl <= 0 then
-    redis.call('PSETEX', banKey, ban, '1')
-    banTtl = ban
-  end
-end
-
-return { count, ttl, banTtl }
-`.trim()
-
-const GCRA_SCRIPT = `
-local stateKey = KEYS[1]
-local banKey = KEYS[2]
-local cost = tonumber(ARGV[1])
-local limit = tonumber(ARGV[2])
-local window = tonumber(ARGV[3])
-local ban = tonumber(ARGV[4])
-local now = tonumber(ARGV[5])
-
-local emission = window / limit
-local burst = window
-local tat = tonumber(redis.call('GET', stateKey) or now)
-local banTtl = 0
-
-if ban > 0 then
-  banTtl = redis.call('PTTL', banKey)
-  if banTtl < 0 then banTtl = 0 end
-end
-
-if banTtl > 0 then
-  local used = math.max(tat - now, 0)
-  local remaining = math.max(0, math.floor((burst - used) / emission))
-  local reset = math.max(0, math.ceil(used))
-  return { 1, remaining, reset, banTtl, banTtl, limit - remaining }
-end
-
-local nextTat = math.max(tat, now) + (emission * cost)
-local allowAt = nextTat - burst
-
-if now < allowAt then
-  local retry = math.ceil(allowAt - now)
-  if ban > 0 then
-    redis.call('PSETEX', banKey, ban, '1')
-    banTtl = ban
-    if banTtl > retry then retry = banTtl end
-  end
-  local used = math.max(tat - now, 0)
-  local remaining = math.max(0, math.floor((burst - used) / emission))
-  local reset = math.max(0, math.ceil(used))
-  return { 1, remaining, reset, retry, banTtl, limit - remaining }
-end
-
-local used = math.max(nextTat - now, 0)
-local ttl = math.max(1, math.ceil(burst + used))
-redis.call('PSETEX', stateKey, ttl, tostring(nextTat))
-local remaining = math.max(0, math.floor((burst - used) / emission))
-local reset = math.max(0, math.ceil(used))
-return { 0, remaining, reset, 0, 0, limit - remaining }
-`.trim()
-
-const isFunction = (value: unknown): value is (...args: unknown[]) => unknown =>
-  typeof value === 'function'
-
-const isPermanentLuaFailure = (error: unknown) => {
-  const message = error instanceof Error ? error.message : String(error)
-
-  return /NOSCRIPT|unknown command|not supported|disabled|permission|NOPERM|ERR unknown command/i.test(
-    message,
-  )
-}
-
-const detectAdapter = (client: RedisClientLike): RedisAdapterMode => {
-  if (isFunction(client.sendCommand) || isFunction(client.incrBy) || isFunction(client.pSetEx)) {
-    return 'node-redis'
-  }
-
-  if (isFunction(client.send)) {
-    return 'bun'
-  }
-
-  if (isFunction(client.incrby)) {
-    return 'ioredis'
-  }
-
-  return 'custom'
-}
-
-const normalizeRedisClient = (
-  client: RedisClientLike,
-  adapter: RedisAdapterMode,
-): NormalizedRedisClient => {
-  const mode = adapter === 'auto' ? detectAdapter(client) : adapter
-  const canEval =
-    isFunction(client.eval) || isFunction(client.send) || isFunction(client.sendCommand)
-  const raw = client as Record<string, unknown>
-  const call = async (name: string, ...args: unknown[]) => {
-    const fn = raw[name]
-
-    if (!isFunction(fn)) {
-      throw new Error(`Redis client does not expose ${name}()`)
-    }
-
-    return fn.apply(client, args)
-  }
-  const evalScript = async (script: string, keys: string[], args: (string | number)[]) => {
-    const stringArgs = args.map(String)
-
-    if (mode === 'node-redis') {
-      if (isFunction(client.eval)) {
-        return (client.eval as unknown as (...parts: unknown[]) => unknown).call(client, script, {
-          keys,
-          arguments: stringArgs,
-        })
-      }
-
-      if (isFunction(client.sendCommand)) {
-        return client.sendCommand(['EVAL', script, String(keys.length), ...keys, ...stringArgs])
-      }
-    }
-
-    if (mode === 'ioredis') {
-      if (isFunction(client.eval)) {
-        return (client.eval as unknown as (...parts: unknown[]) => unknown).call(
-          client,
-          script,
-          keys.length,
-          ...keys,
-          ...stringArgs,
-        )
-      }
-    }
-
-    if (isFunction(client.eval)) {
-      return (client.eval as unknown as (...parts: unknown[]) => unknown).call(
-        client,
-        script,
-        keys,
-        args,
-      )
-    }
-
-    if (isFunction(client.send)) {
-      return client.send('EVAL', [script, String(keys.length), ...keys, ...stringArgs])
-    }
-
-    if (isFunction(client.sendCommand)) {
-      return client.sendCommand(['EVAL', script, String(keys.length), ...keys, ...stringArgs])
-    }
-
-    throw new Error('Redis client does not expose eval/send for atomic mode')
-  }
-
-  return {
-    get: async (key) => call('get', key),
-    incrby: async (key, value) => {
-      if (isFunction(client.incrby)) return client.incrby(key, value)
-
-      if (isFunction(client.incrBy)) return client.incrBy(key, value)
-
-      if (value === 1 && isFunction(client.incr)) return client.incr(key)
-
-      throw new Error('Redis client does not expose incrby()/incrBy()')
-    },
-    pexpire: async (key, milliseconds) => {
-      if (isFunction(client.pexpire)) return client.pexpire(key, milliseconds)
-
-      if (isFunction(client.pExpire)) return client.pExpire(key, milliseconds)
-
-      throw new Error('Redis client does not expose pexpire()/pExpire()')
-    },
-    pttl: async (key) => {
-      if (isFunction(client.pttl)) return client.pttl(key)
-
-      if (isFunction(client.pTTL)) return client.pTTL(key)
-
-      throw new Error('Redis client does not expose pttl()/pTTL()')
-    },
-    psetex: async (key, milliseconds, value) => {
-      if (isFunction(client.psetex)) return client.psetex(key, milliseconds, value)
-
-      if (isFunction(client.pSetEx)) return client.pSetEx(key, milliseconds, value)
-
-      if (isFunction(client.set)) {
-        if (mode === 'node-redis') {
-          return (client.set as unknown as (...parts: unknown[]) => unknown).call(
-            client,
-            key,
-            value,
-            {
-              PX: milliseconds,
-            },
-          )
-        }
-
-        return client.set(key, value, 'PX', milliseconds)
-      }
-
-      throw new Error('Redis client does not expose psetex()/pSetEx()/set()')
-    },
-    ...(canEval ? { evalScript } : {}),
-  }
-}
+import { isPermanentLuaFailure, normalizeRedisClient } from './redisClient'
+import { ATOMIC_SCRIPT, GCRA_SCRIPT } from './redisScripts'
 
 const parseAtomicResult = (
   raw: unknown,
@@ -338,6 +87,24 @@ const physicalKey = ({
   return `${prefix}:${redisHashTag(logicalKey)}:${kind}${suffix ? `:${suffix}` : ''}`
 }
 
+const redisWindowHitResult = (
+  input: Pick<StoreHitInput, 'key' | 'limit'>,
+  now: number,
+  count: number,
+  windowTtl: number,
+  banTtl: number,
+) => {
+  const blocked = count > input.limit || banTtl > 0
+
+  return createHitResult(input, {
+    count,
+    resetAt: now + windowTtl,
+    blocked,
+    retryAfter: blocked ? Math.max(windowTtl, banTtl) : 0,
+    banUntil: banTtl > 0 ? now + banTtl : undefined,
+  })
+}
+
 export const createRedisStore = (options: RedisStoreOptions = {}): RateLimitStore => {
   // Bun's built-in `RedisClient` does not yet expose `eval`/`send` in its
   // public TypeScript surface, but those methods exist (or can be polyfilled
@@ -386,20 +153,7 @@ export const createRedisStore = (options: RedisStoreOptions = {}): RateLimitStor
       }
     }
 
-    const blocked = count > limit || banTtl > 0
-    const retryAfter = blocked ? Math.max(windowTtl, banTtl) : 0
-    const banUntil = banTtl > 0 ? now + banTtl : undefined
-
-    return {
-      key,
-      count,
-      remaining: Math.max(limit - count, 0),
-      limit,
-      resetAt: now + windowTtl,
-      blocked,
-      retryAfter,
-      banUntil,
-    }
+    return redisWindowHitResult(input, now, count, windowTtl, banTtl)
   }
 
   const hitAtomic = async (input: StoreHitInput, now: number): Promise<HitResult> => {
@@ -414,20 +168,7 @@ export const createRedisStore = (options: RedisStoreOptions = {}): RateLimitStor
     )
     const { count, windowTtl, banTtl } = parseAtomicResult(raw, cost, window)
 
-    const blocked = count > limit || banTtl > 0
-    const retryAfter = blocked ? Math.max(windowTtl, banTtl) : 0
-    const banUntil = banTtl > 0 ? now + banTtl : undefined
-
-    return {
-      key,
-      count,
-      remaining: Math.max(limit - count, 0),
-      limit,
-      resetAt: now + windowTtl,
-      blocked,
-      retryAfter,
-      banUntil,
-    }
+    return redisWindowHitResult(input, now, count, windowTtl, banTtl)
   }
 
   const readState = async (key: string, algorithm: AlgorithmStoreHitInput['algorithm']) => {
@@ -456,18 +197,15 @@ export const createRedisStore = (options: RedisStoreOptions = {}): RateLimitStor
       [cost, limit, window, ban, now],
     )
     const parsed = parseGcraResult(raw, input)
-    const banUntil = parsed.banTtl > 0 ? now + parsed.banTtl : undefined
 
-    return {
-      key,
+    return createHitResult(input, {
       count: parsed.count,
       remaining: parsed.remaining,
-      limit,
       resetAt: now + parsed.resetMs,
       blocked: parsed.blocked,
       retryAfter: parsed.retryAfter,
-      banUntil,
-    }
+      banUntil: parsed.banTtl > 0 ? now + parsed.banTtl : undefined,
+    })
   }
 
   const hitSliding = async (input: AlgorithmStoreHitInput): Promise<HitResult> => {
@@ -502,19 +240,14 @@ export const createRedisStore = (options: RedisStoreOptions = {}): RateLimitStor
 
     const resetAt = windowStart + window
     const blocked = count > limit || banTtl > 0
-    const retryAfter = blocked ? Math.max(resetAt - now, banTtl) : 0
-    const banUntil = banTtl > 0 ? now + banTtl : undefined
 
-    return {
-      key,
+    return createHitResult(input, {
       count,
-      remaining: Math.max(limit - count, 0),
-      limit,
       resetAt,
       blocked,
-      retryAfter,
-      banUntil,
-    }
+      retryAfter: blocked ? Math.max(resetAt - now, banTtl) : 0,
+      banUntil: banTtl > 0 ? now + banTtl : undefined,
+    })
   }
 
   const hitAlgorithm = async (input: AlgorithmStoreHitInput): Promise<HitResult> => {
@@ -575,7 +308,3 @@ export const createRedisStore = (options: RedisStoreOptions = {}): RateLimitStor
     algorithmHit: hitAlgorithm,
   }
 }
-
-/** @deprecated Use createRedisStore instead. */
-export const createBunRedisStore = (options: RedisStoreOptions = {}): RateLimitStore =>
-  createRedisStore(options)

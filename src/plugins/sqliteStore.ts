@@ -1,6 +1,10 @@
 import { Database } from 'bun:sqlite'
 
-import { evaluateAlgorithmHit, type StoredAlgorithmState } from '../core/algorithms'
+import {
+  evaluateAlgorithmHit,
+  evaluateFixedWindowHit,
+  type StoredAlgorithmState,
+} from '../core/algorithms'
 import { sanitizeTableName } from '../core/sqliteTableName'
 import type {
   AlgorithmStoreHitInput,
@@ -80,51 +84,17 @@ export class SqliteRateLimitStore implements RateLimitStore {
     )
 
     this.txHit = this.db.transaction((input: StoreHitInput) => {
-      const { key, limit, window, cost, ban = 0, now } = input
+      const { key, now } = input
       const row = select.get(key) as
         | { count: number; resetAt: number; banUntil: number }
         | null
         | undefined
-
-      let activeBan = 0
-
-      if (row && row.banUntil > now) {
-        activeBan = row.banUntil
-      }
-
-      let count: number
-      let resetAt: number
-      let banUntil: number
-
-      if (!row || row.resetAt <= now) {
-        count = cost
-        resetAt = now + window
-        banUntil = activeBan
-      } else {
-        count = row.count + cost
-        resetAt = row.resetAt
-        banUntil = row.banUntil
-      }
-
-      if (count > limit && ban > 0 && banUntil <= now) {
-        banUntil = now + ban
-      }
+      const evaluated = evaluateFixedWindowHit(input, row ?? null)
+      const { count, resetAt, banUntil = 0 } = evaluated.state
 
       upsert.run(key, count, resetAt, banUntil, now)
 
-      const blocked = banUntil > now || count > limit
-      const retryAfter = blocked ? Math.max(resetAt, banUntil) - now : 0
-
-      return {
-        key,
-        count,
-        remaining: Math.max(limit - count, 0),
-        limit,
-        resetAt,
-        blocked,
-        retryAfter,
-        banUntil: banUntil || undefined,
-      }
+      return evaluated.hit
     })
     this.txAlgorithmHit = this.db.transaction((input: AlgorithmStoreHitInput) => {
       const row = selectState.get(input.key) as { state: string | null } | null | undefined

@@ -1,19 +1,19 @@
 import { describe, expect, it } from 'bun:test'
 
-import { createBunRedisStore } from '../../src/plugins/redisStore'
-import type { BunRedisClientLike } from '../../src/types'
+import { createRedisStore } from '../../src/plugins/redisStore'
+import type { RedisClientLike } from '../../src/types'
 
-interface FakeRedis extends BunRedisClientLike {
+interface FakeRedis extends RedisClientLike {
   store: Map<string, number>
   ttl: Map<string, number>
   calls: { name: string; args: unknown[] }[]
 }
 
-const makeFakeRedis = (overrides: Partial<BunRedisClientLike> = {}): FakeRedis => {
+const makeFakeRedis = (overrides: Partial<RedisClientLike> = {}): FakeRedis => {
   const store = new Map<string, number>()
   const ttl = new Map<string, number>()
   const calls: { name: string; args: unknown[] }[] = []
-  const base: BunRedisClientLike = {
+  const base: RedisClientLike = {
     incrby: async (key, value) => {
       calls.push({ name: 'incrby', args: [key, value] })
       const next = (store.get(key) ?? 0) + Number(value)
@@ -45,10 +45,10 @@ const makeFakeRedis = (overrides: Partial<BunRedisClientLike> = {}): FakeRedis =
   return Object.assign({ store, ttl, calls }, base, overrides) as FakeRedis
 }
 
-describe('createBunRedisStore - basic counting', () => {
+describe('createRedisStore - basic counting', () => {
   it('uses the configured prefix for both counter and ban keys', async () => {
     const fake = makeFakeRedis()
-    const store = createBunRedisStore({ client: fake, prefix: 'p' })
+    const store = createRedisStore({ client: fake, prefix: 'p' })
     const now = Date.now()
 
     await store.hit({ key: 'user:1', limit: 5, window: 1000, cost: 1, ban: 1000, now })
@@ -60,7 +60,7 @@ describe('createBunRedisStore - basic counting', () => {
 
   it('falls back to "nazli" prefix when none provided', async () => {
     const fake = makeFakeRedis()
-    const store = createBunRedisStore({ client: fake })
+    const store = createRedisStore({ client: fake })
 
     await store.hit({ key: 'k', limit: 1, window: 1000, cost: 1, now: Date.now() })
 
@@ -69,7 +69,7 @@ describe('createBunRedisStore - basic counting', () => {
 
   it('can use the legacy physical key layout when clusterHashTag is disabled', async () => {
     const fake = makeFakeRedis()
-    const store = createBunRedisStore({ client: fake, prefix: 'p', clusterHashTag: false })
+    const store = createRedisStore({ client: fake, prefix: 'p', clusterHashTag: false })
 
     await store.hit({ key: 'k', limit: 1, window: 1000, cost: 1, now: Date.now() })
 
@@ -78,7 +78,7 @@ describe('createBunRedisStore - basic counting', () => {
 
   it('charges cost > 1 in a single call', async () => {
     const fake = makeFakeRedis()
-    const store = createBunRedisStore({ client: fake, prefix: 'p' })
+    const store = createRedisStore({ client: fake, prefix: 'p' })
     const now = Date.now()
     const r = await store.hit({ key: 'k', limit: 5, window: 1000, cost: 3, now })
 
@@ -90,7 +90,7 @@ describe('createBunRedisStore - basic counting', () => {
 
   it('blocks when count exceeds the limit', async () => {
     const fake = makeFakeRedis()
-    const store = createBunRedisStore({ client: fake, prefix: 'p' })
+    const store = createRedisStore({ client: fake, prefix: 'p' })
     const now = Date.now()
 
     await store.hit({ key: 'k', limit: 2, window: 1000, cost: 1, now })
@@ -102,10 +102,10 @@ describe('createBunRedisStore - basic counting', () => {
   })
 })
 
-describe('createBunRedisStore - TTL safety', () => {
+describe('createRedisStore - TTL safety', () => {
   it('arms PEXPIRE on the first hit', async () => {
     const fake = makeFakeRedis()
-    const store = createBunRedisStore({ client: fake, prefix: 'p' })
+    const store = createRedisStore({ client: fake, prefix: 'p' })
 
     await store.hit({ key: 'k', limit: 5, window: 12_345, cost: 1, now: Date.now() })
 
@@ -121,7 +121,7 @@ describe('createBunRedisStore - TTL safety', () => {
     fake.store.set('p:{k}:counter', 4)
     fake.ttl.set('p:{k}:counter', -1)
 
-    const store = createBunRedisStore({ client: fake, prefix: 'p' })
+    const store = createRedisStore({ client: fake, prefix: 'p' })
 
     await store.hit({ key: 'k', limit: 10, window: 9_999, cost: 1, now: Date.now() })
 
@@ -137,7 +137,7 @@ describe('createBunRedisStore - TTL safety', () => {
     fake.store.set('p:{k}:counter', 3)
     fake.ttl.set('p:{k}:counter', 5_000)
 
-    const store = createBunRedisStore({ client: fake, prefix: 'p' })
+    const store = createRedisStore({ client: fake, prefix: 'p' })
 
     await store.hit({ key: 'k', limit: 10, window: 60_000, cost: 1, now: Date.now() })
 
@@ -152,7 +152,7 @@ describe('createBunRedisStore - TTL safety', () => {
     fake.store.set('p:{k}:counter', 2)
     fake.ttl.set('p:{k}:counter', 7_500)
 
-    const store = createBunRedisStore({ client: fake, prefix: 'p' })
+    const store = createRedisStore({ client: fake, prefix: 'p' })
     const r = await store.hit({ key: 'k', limit: 10, window: 60_000, cost: 1, now: 1_000 })
 
     expect(r.resetAt).toBe(1_000 + 7_500)
@@ -160,10 +160,10 @@ describe('createBunRedisStore - TTL safety', () => {
   })
 })
 
-describe('createBunRedisStore - ban window', () => {
+describe('createRedisStore - ban window', () => {
   it('arms a ban via PSETEX when count exceeds the limit', async () => {
     const fake = makeFakeRedis()
-    const store = createBunRedisStore({ client: fake, prefix: 'p' })
+    const store = createRedisStore({ client: fake, prefix: 'p' })
     const now = Date.now()
 
     await store.hit({ key: 'k', limit: 1, window: 1000, cost: 1, ban: 5000, now })
@@ -180,7 +180,7 @@ describe('createBunRedisStore - ban window', () => {
 
   it('does not re-arm an existing ban on subsequent breaches', async () => {
     const fake = makeFakeRedis()
-    const store = createBunRedisStore({ client: fake, prefix: 'p' })
+    const store = createRedisStore({ client: fake, prefix: 'p' })
     const now = Date.now()
 
     await store.hit({ key: 'k', limit: 1, window: 1000, cost: 1, ban: 5000, now })
@@ -193,7 +193,7 @@ describe('createBunRedisStore - ban window', () => {
 
   it('reports retryAfter as max(windowTtl, banTtl)', async () => {
     const fake = makeFakeRedis()
-    const store = createBunRedisStore({ client: fake, prefix: 'p' })
+    const store = createRedisStore({ client: fake, prefix: 'p' })
     const now = Date.now()
 
     await store.hit({ key: 'k', limit: 1, window: 500, cost: 1, ban: 9_000, now })
@@ -204,7 +204,7 @@ describe('createBunRedisStore - ban window', () => {
 
   it('does not touch the ban key when ban is 0 or omitted', async () => {
     const fake = makeFakeRedis()
-    const store = createBunRedisStore({ client: fake, prefix: 'p' })
+    const store = createRedisStore({ client: fake, prefix: 'p' })
 
     await store.hit({ key: 'k', limit: 1, window: 500, cost: 1, now: Date.now() })
     await store.hit({ key: 'k', limit: 1, window: 500, cost: 1, now: Date.now() })
@@ -214,12 +214,12 @@ describe('createBunRedisStore - ban window', () => {
   })
 })
 
-describe('createBunRedisStore - resilient parsing', () => {
+describe('createRedisStore - resilient parsing', () => {
   it('handles bigint return values from incrby', async () => {
     const fake = makeFakeRedis({
       incrby: async () => 5n,
     })
-    const store = createBunRedisStore({ client: fake, prefix: 'p' })
+    const store = createRedisStore({ client: fake, prefix: 'p' })
     const r = await store.hit({ key: 'k', limit: 10, window: 1000, cost: 1, now: Date.now() })
 
     expect(r.count).toBe(5)
@@ -229,7 +229,7 @@ describe('createBunRedisStore - resilient parsing', () => {
     const fake = makeFakeRedis({
       incrby: async () => '7',
     })
-    const store = createBunRedisStore({ client: fake, prefix: 'p' })
+    const store = createRedisStore({ client: fake, prefix: 'p' })
     const r = await store.hit({ key: 'k', limit: 10, window: 1000, cost: 1, now: Date.now() })
 
     expect(r.count).toBe(7)
@@ -280,7 +280,7 @@ const makeAtomicFake = () => {
     return [count, ttl, banTtl]
   }
 
-  const client: BunRedisClientLike = {
+  const client: RedisClientLike = {
     incrby: async (key, value) => {
       calls.push({ name: 'incrby', args: [key, value] })
       const next = (counters.get(key) ?? 0) + Number(value)
@@ -339,10 +339,10 @@ const makeAtomicFake = () => {
   return { client, calls, evalCalls, sendCalls, counters, ttls }
 }
 
-describe('createBunRedisStore - atomic Lua path', () => {
+describe('createRedisStore - atomic Lua path', () => {
   it('uses eval() when present, in a SINGLE round trip per hit', async () => {
     const fake = makeAtomicFake()
-    const store = createBunRedisStore({ client: fake.client, prefix: 'p' })
+    const store = createRedisStore({ client: fake.client, prefix: 'p' })
 
     const r = await store.hit({
       key: 'k',
@@ -366,7 +366,7 @@ describe('createBunRedisStore - atomic Lua path', () => {
 
   it('arms ban via the atomic script when count exceeds limit', async () => {
     const fake = makeAtomicFake()
-    const store = createBunRedisStore({ client: fake.client, prefix: 'p' })
+    const store = createRedisStore({ client: fake.client, prefix: 'p' })
     const now = 1_000
 
     await store.hit({ key: 'k', limit: 1, window: 1_000, cost: 1, ban: 60_000, now })
@@ -387,9 +387,9 @@ describe('createBunRedisStore - atomic Lua path', () => {
   it('falls back to send() when eval is absent', async () => {
     const fake = makeAtomicFake()
 
-    delete (fake.client as Partial<BunRedisClientLike>).eval
+    delete (fake.client as Partial<RedisClientLike>).eval
 
-    const store = createBunRedisStore({ client: fake.client, prefix: 'p' })
+    const store = createRedisStore({ client: fake.client, prefix: 'p' })
     const r = await store.hit({ key: 'k', limit: 5, window: 1_000, cost: 1, now: 1_000 })
 
     expect(fake.evalCalls.length).toBe(0)
@@ -405,7 +405,7 @@ describe('createBunRedisStore - atomic Lua path', () => {
 
   it('honors disableAtomicScript: forces multi-command even when eval exists', async () => {
     const fake = makeAtomicFake()
-    const store = createBunRedisStore({
+    const store = createRedisStore({
       client: fake.client,
       prefix: 'p',
       disableAtomicScript: true,
@@ -428,7 +428,7 @@ describe('createBunRedisStore - atomic Lua path', () => {
       throw new Error('NOSCRIPT')
     }
 
-    const store = createBunRedisStore({ client: fake.client, prefix: 'p' })
+    const store = createRedisStore({ client: fake.client, prefix: 'p' })
 
     const r1 = await store.hit({ key: 'k', limit: 5, window: 1_000, cost: 1, now: 1_000 })
     const r2 = await store.hit({ key: 'k', limit: 5, window: 1_000, cost: 1, now: 1_000 })
@@ -454,7 +454,7 @@ describe('createBunRedisStore - atomic Lua path', () => {
       return originalEval(...args)
     }
 
-    const store = createBunRedisStore({ client: fake.client, prefix: 'p' })
+    const store = createRedisStore({ client: fake.client, prefix: 'p' })
 
     const r1 = await store.hit({ key: 'k', limit: 5, window: 1_000, cost: 1, now: 1_000 })
     const r2 = await store.hit({ key: 'k', limit: 5, window: 1_000, cost: 1, now: 1_000 })

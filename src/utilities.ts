@@ -20,6 +20,19 @@ export const isHttpMethod = (method: string) => HTTP_METHODS.has(upper(method))
 
 const methodList = () => [...HTTP_METHODS].join(', ')
 
+export const normalizeStandardHeaderOption = (
+  value: unknown,
+  errorMessage: string,
+): boolean | undefined => {
+  if (value === undefined) return undefined
+
+  if (typeof value === 'boolean') return value
+
+  if (value === 'draft-7') return true
+
+  throw new Error(errorMessage)
+}
+
 export const normalizeMethodSet = (
   method?: string | string[],
   label = 'method',

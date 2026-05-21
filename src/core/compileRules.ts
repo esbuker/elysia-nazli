@@ -2,7 +2,6 @@ import type {
   CompiledRule,
   PrefixRule,
   RateLimitAlgorithm,
-  RateLimitHeaderOptions,
   RateLimitPluginOptions,
   RouteRule,
   RuleConfig,
@@ -12,6 +11,7 @@ import {
   isHttpMethod,
   normalizeMethodSet,
   normalizePrefix,
+  normalizeStandardHeaderOption,
   parseDuration,
   upper,
 } from '../utilities'
@@ -78,25 +78,6 @@ const implicitGlobalRule = (options: RateLimitPluginOptions): RuleConfig | undef
   }
 }
 
-const normalizeStandardHeaders = (
-  value: RateLimitHeaderOptions['standard'],
-  label: string,
-): boolean | undefined => {
-  if (value === undefined) {
-    return undefined
-  }
-
-  if (typeof value === 'boolean') {
-    return value
-  }
-
-  if (value === 'draft-7') {
-    return true
-  }
-
-  throw new Error(`Invalid rule "${label}": headers.standard must be boolean or "draft-7"`)
-}
-
 const normalizeRuleHeaderOptions = (id: string, rule: RuleConfig) => {
   if (
     rule.headers !== undefined &&
@@ -115,7 +96,10 @@ const normalizeRuleHeaderOptions = (id: string, rule: RuleConfig) => {
   }
 
   return {
-    standardHeaders: normalizeStandardHeaders(rule.headers.standard, id),
+    standardHeaders: normalizeStandardHeaderOption(
+      rule.headers.standard,
+      `Invalid rule "${id}": headers.standard must be boolean or "draft-7"`,
+    ),
     legacyHeaders: rule.headers.legacy,
   }
 }
@@ -261,6 +245,20 @@ const routeRulesFrom = (routes: RateLimitPluginOptions['routes']): RouteRule[] =
 export const compileRules = (options: RateLimitPluginOptions): CompiledRule[] => {
   const compiled: CompiledRule[] = []
   const seenIds = new Set<string>()
+  const addRule = (
+    id: string,
+    rule: NormalizedRuleConfig,
+    details: { type: CompiledRule['type']; prefix?: string; path?: string | RegExp },
+  ) => {
+    ensureValidRule(id, rule)
+    registerId(seenIds, id)
+    compiled.push({
+      ...rule,
+      ...details,
+      id,
+      methodSet: normalizeMethodSet(rule.method, `"${id}" method`),
+    })
+  }
 
   rejectLegacyDurationFields('global', options)
 
@@ -274,14 +272,7 @@ export const compileRules = (options: RateLimitPluginOptions): CompiledRule[] =>
     const id = globalRule.id ?? 'global'
     const rule = normalizeRuleConfig(id, globalRule)
 
-    ensureValidRule(id, rule)
-    registerId(seenIds, id)
-    compiled.push({
-      ...rule,
-      id,
-      type: 'global',
-      methodSet: normalizeMethodSet(rule.method, `"${id}" method`),
-    })
+    addRule(id, rule, { type: 'global' })
   }
 
   const prefixes = prefixRulesFrom(options.prefixes)
@@ -300,16 +291,7 @@ export const compileRules = (options: RateLimitPluginOptions): CompiledRule[] =>
     const id = rule.id ?? `prefix:${trimmedPrefix}:${index}`
     const normalizedRule = normalizeRuleConfig(id, rule)
 
-    ensureValidRule(id, normalizedRule)
-    registerId(seenIds, id)
-
-    compiled.push({
-      ...normalizedRule,
-      id,
-      type: 'prefix',
-      prefix: normalizePrefix(trimmedPrefix),
-      methodSet: normalizeMethodSet(normalizedRule.method, `"${id}" method`),
-    })
+    addRule(id, normalizedRule, { type: 'prefix', prefix: normalizePrefix(trimmedPrefix) })
   }
 
   const routes = routeRulesFrom(options.routes)
@@ -326,16 +308,7 @@ export const compileRules = (options: RateLimitPluginOptions): CompiledRule[] =>
     const id = rule.id ?? `route:${pathLabel}:${index}`
     const normalizedRule = normalizeRuleConfig(id, rule)
 
-    ensureValidRule(id, normalizedRule)
-    registerId(seenIds, id)
-
-    compiled.push({
-      ...normalizedRule,
-      id,
-      type: 'route',
-      path: rule.path,
-      methodSet: normalizeMethodSet(normalizedRule.method, `"${id}" method`),
-    })
+    addRule(id, normalizedRule, { type: 'route', path: rule.path })
   }
 
   return compiled

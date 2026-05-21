@@ -141,9 +141,7 @@ rateLimit({
 ```
 
 `redisStore(...)` is the ergonomic helper. `createRedisStore(...)` is the same
-portable factory with a more explicit name. The older `createBunRedisStore(...)`
-export still exists as a backward-compatible alias, but new code should prefer
-`redisStore(...)` or `createRedisStore(...)`.
+portable factory with a more explicit name.
 
 Adapter mode is inferred when possible. Set it explicitly when structural detection is ambiguous:
 

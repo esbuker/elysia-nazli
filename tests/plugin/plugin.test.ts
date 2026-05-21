@@ -40,6 +40,19 @@ const recording = (
   }
 }
 
+const passingStore = (extras: Omit<Partial<RateLimitStore>, 'hit'> = {}): RateLimitStore => ({
+  hit: (input) => ({
+    key: input.key,
+    count: 1,
+    remaining: input.limit - 1,
+    limit: input.limit,
+    resetAt: input.now + input.window,
+    blocked: false,
+    retryAfter: 0,
+  }),
+  ...extras,
+})
+
 describe('rateLimit plugin - construction validation', () => {
   it('throws on duplicate rule ids', () => {
     expect(() =>
@@ -710,18 +723,7 @@ describe('rateLimit plugin - cleanup lifecycle', () => {
     }) as typeof setInterval
 
     try {
-      const store: RateLimitStore = {
-        hit: (input) => ({
-          key: input.key,
-          count: 1,
-          remaining: input.limit - 1,
-          limit: input.limit,
-          resetAt: input.now + input.window,
-          blocked: false,
-          retryAfter: 0,
-        }),
-        cleanup: () => {},
-      }
+      const store = passingStore({ cleanup: () => {} })
 
       new Elysia().use(
         rateLimit({
@@ -752,18 +754,7 @@ describe('rateLimit plugin - cleanup lifecycle', () => {
     globalThis.clearInterval = (() => {}) as typeof clearInterval
 
     try {
-      const store: RateLimitStore = {
-        hit: (input) => ({
-          key: input.key,
-          count: 1,
-          remaining: input.limit - 1,
-          limit: input.limit,
-          resetAt: input.now + input.window,
-          blocked: false,
-          retryAfter: 0,
-        }),
-        cleanup: () => {},
-      }
+      const store = passingStore({ cleanup: () => {} })
 
       new Elysia().use(
         rateLimit({
@@ -782,6 +773,40 @@ describe('rateLimit plugin - cleanup lifecycle', () => {
     }
   })
 
+  it('schedules one cleanup timer when primary and fallback share a store instance', () => {
+    const originalSetInterval = globalThis.setInterval
+    const originalClearInterval = globalThis.clearInterval
+    const intervals: { handler: unknown; ms: unknown; token: unknown }[] = []
+
+    globalThis.setInterval = ((handler: unknown, ms?: unknown) => {
+      const token = { __test: true }
+
+      intervals.push({ handler, ms, token })
+
+      return token as unknown as ReturnType<typeof setInterval>
+    }) as typeof setInterval
+    globalThis.clearInterval = (() => {}) as typeof clearInterval
+
+    try {
+      const store = passingStore({ cleanup: () => {} })
+
+      new Elysia().use(
+        rateLimit({
+          global: { id: 'g', limit: 1, window: 60_000 },
+          store,
+          fallbackStore: store,
+          cleanupInterval: 12_345,
+        }),
+      )
+
+      expect(intervals.length).toBe(1)
+      expect(intervals[0]!.ms).toBe(12_345)
+    } finally {
+      globalThis.setInterval = originalSetInterval
+      globalThis.clearInterval = originalClearInterval
+    }
+  })
+
   it('does not schedule a timer when the store has no cleanup() method', () => {
     const originalSetInterval = globalThis.setInterval
     let scheduled = 0
@@ -793,17 +818,7 @@ describe('rateLimit plugin - cleanup lifecycle', () => {
     }) as typeof setInterval
 
     try {
-      const store: RateLimitStore = {
-        hit: (input) => ({
-          key: input.key,
-          count: 1,
-          remaining: input.limit - 1,
-          limit: input.limit,
-          resetAt: input.now + input.window,
-          blocked: false,
-          retryAfter: 0,
-        }),
-      }
+      const store = passingStore()
 
       new Elysia().use(
         rateLimit({
@@ -821,20 +836,11 @@ describe('rateLimit plugin - cleanup lifecycle', () => {
 
   it('invokes store.close on app stop after listening', async () => {
     let closed = 0
-    const store: RateLimitStore = {
-      hit: (input) => ({
-        key: input.key,
-        count: 1,
-        remaining: input.limit - 1,
-        limit: input.limit,
-        resetAt: input.now + input.window,
-        blocked: false,
-        retryAfter: 0,
-      }),
+    const store = passingStore({
       close: () => {
         closed++
       },
-    }
+    })
 
     const app = new Elysia().use(
       rateLimit({
