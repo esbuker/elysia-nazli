@@ -121,6 +121,39 @@ describe('rateLimit plugin - request lifecycle', () => {
     expect(second.status).toBe(429)
   })
 
+  it('keeps the simple memory/header global rule on Elysia sync hook composition', async () => {
+    const app = new Elysia()
+      .use(
+        rateLimit({
+          namespace: 'jit-fast-path',
+          limit: Number.MAX_SAFE_INTEGER,
+          window: '1m',
+          cleanupInterval: 0,
+          key: header('x-client-key'),
+        }),
+      )
+      .get('/ping', () => 'ok')
+
+    const response = await app.handle(
+      new Request('http://localhost/ping', {
+        headers: { 'x-client-key': 'client-a' },
+      }),
+    )
+    const compiled = String(app.fetch)
+    const inference = (app as unknown as { inference: Record<string, boolean> }).inference
+
+    expect(response.status).toBe(200)
+    expect(compiled.startsWith('function map(')).toBeTrue()
+    expect(compiled).not.toContain('await onRequest')
+    expect(inference.body).toBeFalse()
+    expect(inference.cookie).toBeFalse()
+    expect(inference.headers).toBeFalse()
+    expect(inference.query).toBeFalse()
+    expect(inference.server).toBeFalse()
+    expect(inference.path).toBeFalse()
+    expect(inference.set).toBeTrue()
+  })
+
   it('is a no-op when no rules are configured (no headers, no decisions made)', async () => {
     // We can't usefully assert on an injected store here (the no-rules branch
     // never even constructs one), so we directly verify the externally

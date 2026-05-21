@@ -53,12 +53,14 @@ Useful variants:
 BENCH_SQLITE_PATH=:memory: bun run bench
 bun run bench:help
 bun run bench:example
+bun run bench:compare
 ```
 
 Notes:
 
 - On-disk SQLite benchmark files use `BENCH_SQLITE_PATH` and are removed after the run unless you pass `--keep` or set `BENCH_KEEP=1`.
 - Custom benchmark stores can be loaded with `BENCH_MODULE` or `-m`.
+- `bun run bench:compare` compares `elysia-nazli`, `elysia-rate-limit`, and plain Elysia lifecycle/header baselines through `app.handle()` allowed-request loops.
 - See [examples/bench.stores.example.ts](../examples/bench.stores.example.ts) for the `benchStores` export shape.
 
 ## Project links

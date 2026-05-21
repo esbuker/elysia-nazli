@@ -26,6 +26,7 @@ import {
   pickHeaderDecision,
   upper,
 } from './utilities'
+import { getFastHeaderKeyResolver } from './core/keyResolvers'
 
 let nextPluginSeed = 0
 
@@ -68,6 +69,38 @@ const normalizeOnLimitResponse = (response: Response, preserveStatus: boolean) =
   })
 }
 
+const isPromiseLike = <T = unknown>(value: unknown): value is PromiseLike<T> =>
+  Boolean(
+    value && typeof value === 'object' && typeof (value as PromiseLike<T>).then === 'function',
+  )
+
+const normalizeGeneratedKey = (value: unknown) => {
+  if (typeof value !== 'string') {
+    return 'unknown'
+  }
+
+  return value.trim().length > 0 ? value : 'unknown'
+}
+
+const normalizeBaseKey = (value: unknown) => {
+  if (typeof value !== 'string') {
+    return 'unknown'
+  }
+
+  const trimmed = value.trim()
+
+  return trimmed.length > 0 ? trimmed : 'unknown'
+}
+
+const resolveHeaderKey = (request: Request, headerName: string) => {
+  const value = request.headers.get(headerName)?.trim()
+
+  return value ? `header:${headerName}:${value}` : undefined
+}
+
+const resolvePath = (context: Context) =>
+  typeof context.path === 'string' ? context.path : new URL(context.request.url).pathname
+
 export const memoryStore = (options: MemoryStoreOptions | number = {}): MemoryStoreConfig => {
   if (typeof options === 'number') {
     return { type: 'memory', maxEntries: options }
@@ -87,14 +120,18 @@ export const rateLimit = (options: RateLimitPluginOptions = {}) => {
   const fallbackKeyGenerator = createDefaultKeyGenerator({ trustProxy })
   const keyGenerator =
     options.keyGenerator ??
-    (async (ctx: Context, info: RuleMatchContext) => {
+    ((ctx: Context, info: RuleMatchContext) => {
       if (!options.key) {
         return fallbackKeyGenerator(ctx)
       }
 
-      const resolved = await options.key(ctx, info)
+      const resolved = options.key(ctx, info)
 
-      return resolved && resolved.trim().length > 0 ? resolved : 'unknown'
+      if (isPromiseLike(resolved)) {
+        return Promise.resolve(resolved).then(normalizeGeneratedKey)
+      }
+
+      return normalizeGeneratedKey(resolved)
     })
   const { enableStandardHeaders, enableLegacyHeaders } = resolvePluginHeaders(options)
   const cleanupInterval = parseDuration(
@@ -198,6 +235,138 @@ export const rateLimit = (options: RateLimitPluginOptions = {}) => {
       legacyAllowed: boolean
     }
   >()
+
+  const createFastGlobalMemoryRequest = () => {
+    const rule = rules.length === 1 ? rules[0] : undefined
+    const store = rule ? ruleStores.get(rule.id) : undefined
+    const storeErrorPolicy = rule?.onStoreError ?? onStoreError
+    const ruleHeaderKey = getFastHeaderKeyResolver(rule?.key)
+    const optionHeaderKey = getFastHeaderKeyResolver(options.key)
+
+    if (
+      !rule ||
+      rule.type !== 'global' ||
+      rule.algorithm !== 'fixed-window' ||
+      rule.skip ||
+      options.skip ||
+      options.onDecision ||
+      options.onLimit ||
+      options.keyGenerator ||
+      (rule.key && !ruleHeaderKey) ||
+      (options.key && !optionHeaderKey) ||
+      fallbackRateLimitStore ||
+      storeTimeout !== undefined ||
+      hashKeys ||
+      maxKeyLength !== undefined ||
+      storeErrorPolicy !== 'allow' ||
+      !(store instanceof MemoryRateLimitStore)
+    ) {
+      return undefined
+    }
+
+    const keyPrefix = `${namespace}:${rule.id}:`
+    const cost = rule.cost ?? 1
+    const standardAllowed =
+      rule.standardHeaders === true || (rule.standardHeaders !== false && enableStandardHeaders)
+    const legacyAllowed =
+      rule.legacyHeaders === true || (rule.legacyHeaders !== false && enableLegacyHeaders)
+    const shouldSetAllowedHeaders = standardAllowed || legacyAllowed
+    const fastHeaderKey = ruleHeaderKey ?? optionHeaderKey
+    const needsServer = !fastHeaderKey
+
+    const finish = (
+      request: Request,
+      set: Context['set'],
+      rawBaseKey: string | null | undefined,
+    ): Response | undefined => {
+      const now = Date.now()
+      const key = `${keyPrefix}${normalizeBaseKey(rawBaseKey)}`
+      let hit
+
+      try {
+        hit = store.hit({
+          key,
+          limit: rule.limit,
+          window: rule.window,
+          cost,
+          ban: rule.ban,
+          now,
+        })
+      } catch {
+        return undefined
+      }
+
+      let decision: RateLimitDecision | undefined
+      const getDecision = () => {
+        decision ??= {
+          ruleId: rule.id,
+          key,
+          limit: hit.limit,
+          remaining: hit.remaining,
+          count: hit.count,
+          resetAt: hit.resetAt,
+          retryAfter: hit.retryAfter,
+          blocked: hit.blocked,
+        }
+
+        return decision
+      }
+
+      if (!hit.blocked) {
+        if (shouldSetAllowedHeaders) {
+          deferredHeaders.set(request, {
+            decision: getDecision(),
+            resetSeconds: Math.max(Math.ceil((hit.resetAt - now) / SECOND), 0),
+            standardAllowed,
+            legacyAllowed,
+          })
+        }
+
+        return undefined
+      }
+
+      const blockedBy = getDecision()
+      const retryAfterSeconds = Math.max(Math.ceil(hit.retryAfter / SECOND), 1)
+
+      set.headers = { ...set.headers }
+
+      setRateLimitHeaders({
+        headers: set.headers,
+        decision: blockedBy,
+        resetSeconds: Math.max(Math.ceil((hit.resetAt - now) / SECOND), 0),
+        standardAllowed,
+        legacyAllowed,
+      })
+
+      set.status = 429
+      set.headers['retry-after'] = String(retryAfterSeconds)
+
+      return defaultLimitedResponse(retryAfterSeconds)
+    }
+
+    return {
+      needsServer,
+      handle: (
+        request: Request,
+        set: Context['set'],
+        server?: Context['server'],
+      ): Response | undefined => {
+        const method = upper(request.method)
+
+        if (rule.methodSet && !rule.methodSet.has(method)) {
+          return undefined
+        }
+
+        const rawBaseKey = fastHeaderKey
+          ? resolveHeaderKey(request, fastHeaderKey)
+          : fallbackKeyGenerator({ request, server } as Context)
+
+        return finish(request, set, rawBaseKey)
+      },
+    }
+  }
+
+  const fastGlobalMemoryRequest = createFastGlobalMemoryRequest()
 
   const evaluateRequest = async ({
     context,
@@ -325,7 +494,7 @@ export const rateLimit = (options: RateLimitPluginOptions = {}) => {
     return defaultLimitedResponse(retryAfterSeconds)
   }
 
-  return new Elysia({ name: pluginName, seed: pluginSeed })
+  const plugin = new Elysia({ name: pluginName, seed: pluginSeed })
     .macro({
       rateLimit: (routeRule: RateLimitRouteMacroConfig) => {
         if (!routeRule) {
@@ -387,7 +556,28 @@ export const rateLimit = (options: RateLimitPluginOptions = {}) => {
         legacyAllowed: pending.legacyAllowed,
       })
     })
-    .onRequest(async (ctx) => {
+
+  /* eslint-disable prefer-const -- Keep Bun from folding this hook into a direct helper return; Elysia flags that shape as slower. */
+  if (fastGlobalMemoryRequest) {
+    if (fastGlobalMemoryRequest.needsServer) {
+      plugin.onRequest((ctx) => {
+        let response: ReturnType<typeof fastGlobalMemoryRequest.handle>
+
+        response = fastGlobalMemoryRequest.handle(ctx.request, ctx.set, ctx.server)
+
+        return response
+      })
+    } else {
+      plugin.onRequest((ctx) => {
+        let response: ReturnType<typeof fastGlobalMemoryRequest.handle>
+
+        response = fastGlobalMemoryRequest.handle(ctx.request, ctx.set)
+
+        return response
+      })
+    }
+  } else {
+    plugin.onRequest(async (ctx) => {
       const ctxAsContext = ctx as Context
 
       if (rules.length === 0) {
@@ -395,9 +585,8 @@ export const rateLimit = (options: RateLimitPluginOptions = {}) => {
       }
 
       const method = upper(ctx.request.method)
-      const path = new URL(ctx.request.url).pathname
+      const path = resolvePath(ctxAsContext)
       const activeRules = getActiveRules(rules, method, path)
-
       const response = await evaluateRequest({
         context: ctxAsContext,
         method,
@@ -410,9 +599,12 @@ export const rateLimit = (options: RateLimitPluginOptions = {}) => {
         return response
       }
     })
-    .onStop(() => {
-      storeRegistry.close()
-    })
+  }
+  /* eslint-enable prefer-const */
+
+  return plugin.onStop(() => {
+    storeRegistry.close()
+  })
 }
 
 export type {

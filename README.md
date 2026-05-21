@@ -238,6 +238,7 @@ Useful scripts:
 | `bun run format:check`     | Checks Prettier formatting                      |
 | `bun run build`            | Builds JS, declarations, and bundle size report |
 | `bun run bench`            | Runs local benchmarks                           |
+| `bun run bench:compare`    | Compares Elysia plugin request-path throughput  |
 | `bun run release:check`    | Runs typecheck, tests, and build                |
 
 ## Contributing

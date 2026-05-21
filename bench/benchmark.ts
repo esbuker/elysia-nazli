@@ -2,6 +2,7 @@
  * elysia-nazli micro-benchmarks
  *
  * - Built-in: MemoryRateLimitStore vs SqliteRateLimitStore (`RateLimitStore.hit` loop).
+ * - Comparison: Elysia app.handle() throughput against elysia-rate-limit.
  * - Custom: pass `-m ./your.bench.ts` or a positional path (see `--help`).
  *
  * Extension modules are resolved under the project root, realpath-checked (symlink-safe),
@@ -9,11 +10,14 @@
  */
 
 import path from 'bun:path'
+import { Elysia } from 'elysia'
+import { rateLimit as rayRateLimit } from 'elysia-rate-limit'
 
 import { BENCH_HELP, parseBenchCli, resolveBenchModuleUserPath } from './cli'
 import { benchmarkStoreHits } from './hitLoop'
+import { benchmarkHttpRequests, type BenchHttpTarget } from './httpLoop'
 import { benchModuleFileUrl } from './safeBenchPath'
-import { MemoryRateLimitStore, type RateLimitStore } from '../src/index'
+import { header, MemoryRateLimitStore, rateLimit, type RateLimitStore } from '../src/index'
 import { SqliteRateLimitStore } from '../src/sqlite'
 
 const posixDirname = (filePath: string) => {
@@ -106,6 +110,8 @@ if (benchCli.help) {
 
 const keepBenchArtifacts = benchCli.keep
 const noBuiltinStores = benchCli.noBuiltinStores
+const comparePlugins = benchCli.comparePlugins
+const onlyPluginCompare = benchCli.onlyPluginCompare
 
 type Scenario = {
   name: string
@@ -125,13 +131,27 @@ export type BenchStoreEntry = {
   store: RateLimitStore
 }
 
+type BenchHttpEntry = {
+  name: string
+  create: () => BenchHttpTarget
+}
+
 const ITERATIONS = Number(Bun.env.BENCH_ITERATIONS ?? 1_000_000)
 const MANY_KEYS = Number(Bun.env.BENCH_UNIQUE_KEYS ?? 200_000)
 const SQLITE_PATH = Bun.env.BENCH_SQLITE_PATH ?? './tmp/bench/nazli-bench.sqlite'
+const HTTP_ITERATIONS = Number(Bun.env.BENCH_HTTP_ITERATIONS ?? 100_000)
+const HTTP_MANY_KEYS = Number(Bun.env.BENCH_HTTP_UNIQUE_KEYS ?? 20_000)
+const HTTP_WARMUP = Number(Bun.env.BENCH_HTTP_WARMUP ?? 1_000)
+const HTTP_KEY_HEADER = 'x-bench-key'
 
 const storeScenarios: Scenario[] = [
   { name: 'hot-key', iterations: ITERATIONS, uniqueKeys: 1 },
   { name: 'many-keys', iterations: ITERATIONS, uniqueKeys: Math.max(1, MANY_KEYS) },
+]
+
+const httpScenarios: Scenario[] = [
+  { name: 'hot-key', iterations: HTTP_ITERATIONS, uniqueKeys: 1 },
+  { name: 'many-keys', iterations: HTTP_ITERATIONS, uniqueKeys: Math.max(1, HTTP_MANY_KEYS) },
 ]
 
 const runStoreScenario = async (
@@ -144,6 +164,75 @@ const runStoreScenario = async (
     iterations: scenario.iterations,
     uniqueKeys: scenario.uniqueKeys,
     now,
+  })
+
+  return {
+    name,
+    scenario: scenario.name,
+    elapsed,
+    opsPerSec,
+  }
+}
+
+const pluginComparisonEntries = (): BenchHttpEntry[] => [
+  {
+    name: 'plain-elysia',
+    create: () => new Elysia().get('/bench', () => 'ok'),
+  },
+  {
+    name: 'plain-elysia+hook',
+    create: () => new Elysia().onRequest(() => {}).get('/bench', () => 'ok'),
+  },
+  {
+    name: 'plain-elysia+headers',
+    create: () =>
+      new Elysia()
+        .onRequest(({ set }) => {
+          set.headers['ratelimit-limit'] = String(Number.MAX_SAFE_INTEGER)
+          set.headers['ratelimit-remaining'] = String(Number.MAX_SAFE_INTEGER - 1)
+          set.headers['ratelimit-reset'] = '60'
+        })
+        .get('/bench', () => 'ok'),
+  },
+  {
+    name: 'elysia-nazli',
+    create: () =>
+      new Elysia()
+        .use(
+          rateLimit({
+            limit: Number.MAX_SAFE_INTEGER,
+            window: 60_000,
+            cleanupInterval: 0,
+            key: header(HTTP_KEY_HEADER),
+          }),
+        )
+        .get('/bench', () => 'ok'),
+  },
+  {
+    name: 'elysia-rate-limit',
+    create: () =>
+      new Elysia()
+        .use(
+          rayRateLimit({
+            max: Number.MAX_SAFE_INTEGER,
+            duration: 60_000,
+            generator: (request) => request.headers.get(HTTP_KEY_HEADER) ?? 'missing',
+          }),
+        )
+        .get('/bench', () => 'ok'),
+  },
+]
+
+const runHttpScenario = async (
+  name: string,
+  target: BenchHttpTarget,
+  scenario: Scenario,
+): Promise<BenchmarkResult> => {
+  const { elapsed, opsPerSec } = await benchmarkHttpRequests(target, {
+    iterations: scenario.iterations,
+    uniqueKeys: scenario.uniqueKeys,
+    warmup: HTTP_WARMUP,
+    keyHeader: HTTP_KEY_HEADER,
   })
 
   return {
@@ -242,79 +331,116 @@ const assertDistinctNames = (names: string[], label: string) => {
 }
 
 const main = async () => {
-  if (SQLITE_PATH !== ':memory:') {
+  const runStoreBenchmarks = !onlyPluginCompare
+  let memoryStore: RateLimitStore | undefined
+  let sqliteStore: RateLimitStore | undefined
+  let shouldCleanupDiskSqlite = false
+  let extraStores: BenchStoreEntry[] = []
+
+  if (runStoreBenchmarks && SQLITE_PATH !== ':memory:') {
     await ensureParentDir(SQLITE_PATH)
   }
 
-  const projectRoot = process.cwd()
-  const moduleUserPath = resolveBenchModuleUserPath(benchCli)
   let moduleHref: string | undefined
   let moduleDisplayPath: string | undefined
 
-  if (moduleUserPath) {
-    moduleHref = await benchModuleFileUrl(moduleUserPath, projectRoot)
-    moduleDisplayPath = moduleUserPath
-  }
+  if (runStoreBenchmarks) {
+    const projectRoot = process.cwd()
+    const moduleUserPath = resolveBenchModuleUserPath(benchCli)
 
-  const extraModule = moduleHref ? await loadBenchModule(moduleHref, moduleDisplayPath!) : undefined
-  const extraStores = extraModule?.benchStores?.slice() ?? []
+    if (moduleUserPath) {
+      moduleHref = await benchModuleFileUrl(moduleUserPath, projectRoot)
+      moduleDisplayPath = moduleUserPath
+    }
 
-  for (let i = 0; i < extraStores.length; i++) {
-    validateStoreEntry(extraStores[i]!, `benchStores[${i}]`)
-  }
+    const extraModule = moduleHref
+      ? await loadBenchModule(moduleHref, moduleDisplayPath!)
+      : undefined
 
-  assertDistinctNames(
-    [...(noBuiltinStores ? [] : ['memory-js', 'sqlite']), ...extraStores.map((s) => s.name)],
-    'store benchmark',
-  )
+    extraStores = extraModule?.benchStores?.slice() ?? []
 
-  if (noBuiltinStores && extraStores.length === 0) {
-    throw new Error(
-      'benchmark: --no-builtin-stores was set but benchStores is missing or empty; add at least one store or drop the flag',
+    for (let i = 0; i < extraStores.length; i++) {
+      validateStoreEntry(extraStores[i]!, `benchStores[${i}]`)
+    }
+
+    assertDistinctNames(
+      [...(noBuiltinStores ? [] : ['memory-js', 'sqlite']), ...extraStores.map((s) => s.name)],
+      'store benchmark',
     )
+
+    if (noBuiltinStores && extraStores.length === 0) {
+      throw new Error(
+        'benchmark: --no-builtin-stores was set but benchStores is missing or empty; add at least one store or drop the flag',
+      )
+    }
+
+    memoryStore = noBuiltinStores ? undefined : new MemoryRateLimitStore()
+    sqliteStore = noBuiltinStores
+      ? undefined
+      : new SqliteRateLimitStore({
+          type: 'sqlite',
+          path: SQLITE_PATH,
+          tableName: 'nazli_bench',
+        })
+    shouldCleanupDiskSqlite = !noBuiltinStores && SQLITE_PATH !== ':memory:' && Boolean(sqliteStore)
   }
 
-  const memoryStore: RateLimitStore | undefined = noBuiltinStores
-    ? undefined
-    : new MemoryRateLimitStore()
-  const sqliteStore: RateLimitStore | undefined = noBuiltinStores
-    ? undefined
-    : new SqliteRateLimitStore({
-        type: 'sqlite',
-        path: SQLITE_PATH,
-        tableName: 'nazli_bench',
-      })
-
-  const builtinEntries: Array<{ name: string; store: RateLimitStore }> = noBuiltinStores
-    ? []
-    : [
-        { name: 'memory-js', store: memoryStore! },
-        { name: 'sqlite', store: sqliteStore! },
-      ]
+  const builtinEntries: Array<{ name: string; store: RateLimitStore }> =
+    !runStoreBenchmarks || noBuiltinStores
+      ? []
+      : [
+          { name: 'memory-js', store: memoryStore! },
+          { name: 'sqlite', store: sqliteStore! },
+        ]
 
   const storeEntries = [...builtinEntries, ...extraStores]
-  const shouldCleanupDiskSqlite =
-    !noBuiltinStores && SQLITE_PATH !== ':memory:' && Boolean(sqliteStore)
 
   try {
     console.log('elysia-nazli benchmark')
-    console.log(`Store iterations / scenario: ${ITERATIONS.toLocaleString()}`)
-    console.log(`Many-keys cardinality: ${MANY_KEYS.toLocaleString()}`)
+
+    if (runStoreBenchmarks) {
+      console.log(`Store iterations / scenario: ${ITERATIONS.toLocaleString()}`)
+      console.log(`Store many-keys cardinality: ${MANY_KEYS.toLocaleString()}`)
+    }
+
+    if (comparePlugins) {
+      console.log(`HTTP iterations / scenario: ${HTTP_ITERATIONS.toLocaleString()}`)
+      console.log(`HTTP many-keys cardinality: ${HTTP_MANY_KEYS.toLocaleString()}`)
+      console.log(`HTTP warmup / entry / scenario: ${HTTP_WARMUP.toLocaleString()}`)
+    }
 
     if (moduleDisplayPath) {
       console.log(`Extension module: ${moduleDisplayPath}`)
     }
     console.log('')
 
-    const storeResults: BenchmarkResult[] = []
+    if (runStoreBenchmarks) {
+      const storeResults: BenchmarkResult[] = []
 
-    for (const scenario of storeScenarios) {
-      for (const entry of storeEntries) {
-        storeResults.push(await runStoreScenario(entry.name, entry.store, scenario))
+      for (const scenario of storeScenarios) {
+        for (const entry of storeEntries) {
+          storeResults.push(await runStoreScenario(entry.name, entry.store, scenario))
+        }
       }
+
+      printResults('=== Store backends (RateLimitStore.hit) ===', storeResults, storeScenarios)
     }
 
-    printResults('=== Store backends (RateLimitStore.hit) ===', storeResults, storeScenarios)
+    if (comparePlugins) {
+      const httpResults: BenchmarkResult[] = []
+
+      for (const scenario of httpScenarios) {
+        for (const entry of pluginComparisonEntries()) {
+          httpResults.push(await runHttpScenario(entry.name, entry.create(), scenario))
+        }
+      }
+
+      printResults(
+        '=== HTTP plugins (Elysia app.handle, allowed requests) ===',
+        httpResults,
+        httpScenarios,
+      )
+    }
 
     if (keepBenchArtifacts && shouldCleanupDiskSqlite) {
       console.log(`SQLite bench database left on disk (inspect WAL/SHM next to it): ${SQLITE_PATH}`)

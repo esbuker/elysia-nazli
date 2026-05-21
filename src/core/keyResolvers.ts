@@ -19,6 +19,18 @@ export interface BodyFieldResolverOptions {
   hmacSecret?: string | Uint8Array
 }
 
+export const FAST_HEADER_KEY_RESOLVER = Symbol('elysia-nazli.fastHeaderKeyResolver')
+
+type FastHeaderKeyResolver = RateLimitKeyResolver & {
+  [FAST_HEADER_KEY_RESOLVER]?: string
+}
+
+export const getFastHeaderKeyResolver = (
+  resolver: RateLimitKeyResolver | undefined,
+): string | undefined => {
+  return (resolver as FastHeaderKeyResolver | undefined)?.[FAST_HEADER_KEY_RESOLVER]
+}
+
 const compact = (value: unknown): string | undefined => {
   if (value === undefined || value === null) {
     return undefined
@@ -106,11 +118,17 @@ export const header = (name: string): RateLimitKeyResolver => {
     throw new Error('header(): header name must be non-empty')
   }
 
-  return (ctx) => {
+  const resolver: FastHeaderKeyResolver = (ctx) => {
     const value = ctx.request.headers.get(normalized)
 
     return keyPart(`header:${normalized}`, value)
   }
+
+  Object.defineProperty(resolver, FAST_HEADER_KEY_RESOLVER, {
+    value: normalized,
+  })
+
+  return resolver
 }
 
 export const compose = (...resolvers: RateLimitKeyResolver[]): RateLimitKeyResolver => {

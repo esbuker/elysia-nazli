@@ -3,6 +3,7 @@ import path from 'bun:path'
 import { symlink } from 'node:fs/promises'
 
 import { benchmarkStoreHits } from '../../bench/hitLoop'
+import { benchmarkHttpRequests } from '../../bench/httpLoop'
 import { parseBenchCli, resolveBenchModuleUserPath } from '../../bench/cli'
 import { benchModuleFileUrl } from '../../bench/safeBenchPath'
 import { MemoryRateLimitStore } from '../../src/index'
@@ -30,7 +31,19 @@ describe('parseBenchCli', () => {
     expect(p.moduleFlag).toBe('./x.ts')
     expect(p.keep).toBeTrue()
     expect(p.noBuiltinStores).toBeTrue()
+    expect(p.comparePlugins).toBeFalse()
+    expect(p.onlyPluginCompare).toBeFalse()
     expect(p.help).toBeFalse()
+  })
+
+  it('parses plugin comparison flags', () => {
+    const withComparison = parseBenchCli(['--compare-plugins'])
+    const onlyComparison = parseBenchCli(['--only-plugin-compare'])
+
+    expect(withComparison.comparePlugins).toBeTrue()
+    expect(withComparison.onlyPluginCompare).toBeFalse()
+    expect(onlyComparison.comparePlugins).toBeTrue()
+    expect(onlyComparison.onlyPluginCompare).toBeTrue()
   })
 
   it('accepts -m shorthand', () => {
@@ -139,6 +152,28 @@ describe('benchmarkStoreHits', () => {
     })
 
     expect(r.iterations).toBe(50)
+    expect(r.opsPerSec).toBeGreaterThan(0)
+    expect(r.elapsed).toBeGreaterThan(0)
+  })
+})
+
+describe('benchmarkHttpRequests', () => {
+  it('runs a short request loop', async () => {
+    const r = await benchmarkHttpRequests(
+      {
+        handle: (request) =>
+          new Response(request.headers.get('x-bench-key') ?? 'missing', { status: 200 }),
+      },
+      {
+        iterations: 20,
+        uniqueKeys: 4,
+        warmup: 2,
+      },
+    )
+
+    expect(r.iterations).toBe(20)
+    expect(r.uniqueKeys).toBe(4)
+    expect(r.statusChecksum).toBe(4_000)
     expect(r.opsPerSec).toBeGreaterThan(0)
     expect(r.elapsed).toBeGreaterThan(0)
   })
