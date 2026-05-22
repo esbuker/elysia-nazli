@@ -1,201 +1,310 @@
 import { redis as bunRedis } from 'bun'
 
+import {
+  createHitResult,
+  evaluateAlgorithmHit,
+  type StoredAlgorithmState,
+} from '../core/algorithms'
+import { toSafeNumber } from '../core/toSafeNumber'
 import type {
-  BunRedisClientLike,
-  BunRedisStoreOptions,
+  AlgorithmStoreHitInput,
   HitResult,
   RateLimitStore,
-  StoreHitInput
+  RedisClientLike,
+  RedisStoreOptions,
+  StoreHitInput,
 } from '../types'
-import { toSafeNumber } from '../utilities'
-
-/**
- * Atomic rate-limit Lua script.
- *
- * Inputs:
- *   KEYS[1] = counter key
- *   KEYS[2] = ban key
- *   ARGV[1] = cost (integer ≥ 1)
- *   ARGV[2] = limit (integer ≥ 1)
- *   ARGV[3] = windowMs (integer ≥ 1)
- *   ARGV[4] = banMs (integer ≥ 0; 0 disables ban arming)
- *
- * Output: array of 3 numbers
- *   [count, windowTtlMs, banTtlMs]
- *
- * Semantics:
- *   1. INCRBY counter cost
- *   2. If this is the first hit (count == cost) OR the key has no TTL, set
- *      PEXPIRE to windowMs. This guards against TTL drift after server
- *      crashes between INCR and PEXPIRE.
- *   3. If banMs > 0 and count > limit and no ban is active, PSETEX a fresh
- *      ban window.
- *   4. Read both TTLs and return them.
- *
- * The script is idempotent and safe to run on a Redis cluster (both keys
- * share the same `{tag}` so make sure your prefix uses a hash-tag if you
- * deploy on cluster mode).
- */
-const ATOMIC_SCRIPT = `
-local counterKey = KEYS[1]
-local banKey = KEYS[2]
-local cost = tonumber(ARGV[1])
-local limit = tonumber(ARGV[2])
-local windowMs = tonumber(ARGV[3])
-local banMs = tonumber(ARGV[4])
-
-local count = redis.call('INCRBY', counterKey, cost)
-local ttl = redis.call('PTTL', counterKey)
-if count == cost or ttl < 0 then
-  redis.call('PEXPIRE', counterKey, windowMs)
-  ttl = windowMs
-end
-
-local banTtl = 0
-if banMs > 0 then
-  banTtl = redis.call('PTTL', banKey)
-  if banTtl < 0 then banTtl = 0 end
-  if count > limit and banTtl <= 0 then
-    redis.call('PSETEX', banKey, banMs, '1')
-    banTtl = banMs
-  end
-end
-
-return { count, ttl, banTtl }
-`.trim()
-
-const callEval = async (
-  client: BunRedisClientLike,
-  keys: string[],
-  args: (string | number)[]
-): Promise<unknown> => {
-  if (typeof client.eval === 'function') {
-    return client.eval(ATOMIC_SCRIPT, keys, args)
-  }
-  if (typeof client.send === 'function') {
-    return client.send('EVAL', [ATOMIC_SCRIPT, String(keys.length), ...keys, ...args.map(String)])
-  }
-  throw new Error('Redis client does not expose eval/send for atomic mode')
-}
+import { isPermanentLuaFailure, normalizeRedisClient } from './redisClient'
+import { ATOMIC_SCRIPT, GCRA_SCRIPT } from './redisScripts'
 
 const parseAtomicResult = (
   raw: unknown,
   fallbackCount: number,
-  fallbackWindowMs: number
+  fallbackWindow: number,
 ): { count: number; windowTtl: number; banTtl: number } => {
   if (!Array.isArray(raw)) {
-    return { count: fallbackCount, windowTtl: fallbackWindowMs, banTtl: 0 }
+    return { count: fallbackCount, windowTtl: fallbackWindow, banTtl: 0 }
   }
+
   return {
     count: toSafeNumber(raw[0], fallbackCount),
-    windowTtl: Math.max(toSafeNumber(raw[1], fallbackWindowMs), 0),
-    banTtl: Math.max(toSafeNumber(raw[2], 0), 0)
+    windowTtl: Math.max(toSafeNumber(raw[1], fallbackWindow), 0),
+    banTtl: Math.max(toSafeNumber(raw[2], 0), 0),
   }
 }
 
-export const createBunRedisStore = (options: BunRedisStoreOptions = {}): RateLimitStore => {
+const parseGcraResult = (
+  raw: unknown,
+  input: AlgorithmStoreHitInput,
+): {
+  blocked: boolean
+  remaining: number
+  resetMs: number
+  retryAfter: number
+  banTtl: number
+  count: number
+} => {
+  if (!Array.isArray(raw)) {
+    return {
+      blocked: false,
+      remaining: Math.max(input.limit - input.cost, 0),
+      resetMs: input.window,
+      retryAfter: 0,
+      banTtl: 0,
+      count: input.cost,
+    }
+  }
+
+  return {
+    blocked: toSafeNumber(raw[0], 0) === 1,
+    remaining: Math.max(toSafeNumber(raw[1], 0), 0),
+    resetMs: Math.max(toSafeNumber(raw[2], 0), 0),
+    retryAfter: Math.max(toSafeNumber(raw[3], 0), 0),
+    banTtl: Math.max(toSafeNumber(raw[4], 0), 0),
+    count: Math.max(toSafeNumber(raw[5], input.limit), 0),
+  }
+}
+
+const redisHashTag = (logicalKey: string) => `{${encodeURIComponent(logicalKey)}}`
+
+const physicalKey = ({
+  prefix,
+  kind,
+  logicalKey,
+  clusterHashTag,
+  suffix,
+}: {
+  prefix: string
+  kind: string
+  logicalKey: string
+  clusterHashTag: boolean
+  suffix?: string
+}) => {
+  if (!clusterHashTag) {
+    return `${prefix}:${kind}:${logicalKey}${suffix ? `:${suffix}` : ''}`
+  }
+
+  return `${prefix}:${redisHashTag(logicalKey)}:${kind}${suffix ? `:${suffix}` : ''}`
+}
+
+const redisWindowHitResult = (
+  input: Pick<StoreHitInput, 'key' | 'limit'>,
+  now: number,
+  count: number,
+  windowTtl: number,
+  banTtl: number,
+) => {
+  const blocked = count > input.limit || banTtl > 0
+
+  return createHitResult(input, {
+    count,
+    resetAt: now + windowTtl,
+    blocked,
+    retryAfter: blocked ? Math.max(windowTtl, banTtl) : 0,
+    banUntil: banTtl > 0 ? now + banTtl : undefined,
+  })
+}
+
+export const createRedisStore = (options: RedisStoreOptions = {}): RateLimitStore => {
   // Bun's built-in `RedisClient` does not yet expose `eval`/`send` in its
   // public TypeScript surface, but those methods exist (or can be polyfilled
   // by the user). Treat the client structurally — if `eval` or `send` is
   // present at runtime we use the atomic path, otherwise we fall back.
-  const client = (options.client ?? bunRedis) as BunRedisClientLike
+  const rawClient = (options.client ?? bunRedis) as RedisClientLike
+  const client = normalizeRedisClient(rawClient, options.adapter ?? 'auto')
   const prefix = options.prefix ?? 'nazli'
-  const atomicSupported =
-    !options.disableAtomicScript &&
-    (typeof client.eval === 'function' || typeof client.send === 'function')
+  const clusterHashTag = options.clusterHashTag ?? true
+  const atomicSupported = !options.disableAtomicScript && typeof client.evalScript === 'function'
+  const keyFor = (kind: string, logicalKey: string, suffix?: string) =>
+    physicalKey({ prefix, kind, logicalKey, clusterHashTag, suffix })
 
   // Memoize whether the atomic path is healthy; first failure flips us to
   // multi-command for the lifetime of this store. Real Redis errors propagate
   // to the caller (and through the store-error policy).
   let useAtomic = atomicSupported
+  let useGcraAtomic = atomicSupported
 
   const hitMulti = async (input: StoreHitInput, now: number): Promise<HitResult> => {
-    const { key, limit, windowMs, cost, banMs = 0 } = input
-    const counterKey = `${prefix}:counter:${key}`
-    const banKey = `${prefix}:ban:${key}`
+    const { key, limit, window, cost, ban = 0 } = input
+    const counterKey = keyFor('counter', key)
+    const banKey = keyFor('ban', key)
 
     const countRaw = await client.incrby(counterKey, cost)
     const count = toSafeNumber(countRaw, cost)
 
     let ttlRaw = await client.pttl(counterKey)
     let windowTtl = toSafeNumber(ttlRaw, -1)
+
     if (count === cost || windowTtl < 0) {
-      await client.pexpire(counterKey, windowMs)
+      await client.pexpire(counterKey, window)
       ttlRaw = await client.pttl(counterKey)
-      windowTtl = toSafeNumber(ttlRaw, windowMs)
+      windowTtl = toSafeNumber(ttlRaw, window)
     }
     windowTtl = Math.max(windowTtl, 0)
 
     let banTtl = 0
-    if (banMs > 0) {
+
+    if (ban > 0) {
       banTtl = Math.max(toSafeNumber(await client.pttl(banKey), 0), 0)
+
       if (count > limit && banTtl <= 0) {
-        await client.psetex(banKey, banMs, '1')
-        banTtl = banMs
+        await client.psetex(banKey, ban, '1')
+        banTtl = ban
       }
     }
 
-    const blocked = count > limit || banTtl > 0
-    const retryAfterMs = blocked ? Math.max(windowTtl, banTtl) : 0
-    const banUntil = banTtl > 0 ? now + banTtl : undefined
-
-    return {
-      key,
-      count,
-      remaining: Math.max(limit - count, 0),
-      limit,
-      resetAt: now + windowTtl,
-      blocked,
-      retryAfterMs,
-      banUntil
-    }
+    return redisWindowHitResult(input, now, count, windowTtl, banTtl)
   }
 
   const hitAtomic = async (input: StoreHitInput, now: number): Promise<HitResult> => {
-    const { key, limit, windowMs, cost, banMs = 0 } = input
-    const counterKey = `${prefix}:counter:${key}`
-    const banKey = `${prefix}:ban:${key}`
+    const { key, limit, window, cost, ban = 0 } = input
+    const counterKey = keyFor('counter', key)
+    const banKey = keyFor('ban', key)
 
-    const raw = await callEval(client, [counterKey, banKey], [cost, limit, windowMs, banMs])
-    const { count, windowTtl, banTtl } = parseAtomicResult(raw, cost, windowMs)
+    const raw = await client.evalScript?.(
+      ATOMIC_SCRIPT,
+      [counterKey, banKey],
+      [cost, limit, window, ban],
+    )
+    const { count, windowTtl, banTtl } = parseAtomicResult(raw, cost, window)
 
-    const blocked = count > limit || banTtl > 0
-    const retryAfterMs = blocked ? Math.max(windowTtl, banTtl) : 0
-    const banUntil = banTtl > 0 ? now + banTtl : undefined
+    return redisWindowHitResult(input, now, count, windowTtl, banTtl)
+  }
 
-    return {
-      key,
-      count,
-      remaining: Math.max(limit - count, 0),
-      limit,
-      resetAt: now + windowTtl,
-      blocked,
-      retryAfterMs,
-      banUntil
+  const readState = async (key: string, algorithm: AlgorithmStoreHitInput['algorithm']) => {
+    const raw = await client.get(key)
+
+    if (typeof raw !== 'string' || raw.length === 0) {
+      return null
     }
+
+    try {
+      const parsed = JSON.parse(raw) as StoredAlgorithmState
+
+      return parsed.algorithm === algorithm ? parsed : null
+    } catch {
+      return null
+    }
+  }
+
+  const hitGcraAtomic = async (input: AlgorithmStoreHitInput): Promise<HitResult> => {
+    const { key, limit, window, cost, ban = 0, now } = input
+    const stateKey = keyFor('state', key)
+    const banKey = keyFor('ban', key)
+    const raw = await client.evalScript?.(
+      GCRA_SCRIPT,
+      [stateKey, banKey],
+      [cost, limit, window, ban, now],
+    )
+    const parsed = parseGcraResult(raw, input)
+
+    return createHitResult(input, {
+      count: parsed.count,
+      remaining: parsed.remaining,
+      resetAt: now + parsed.resetMs,
+      blocked: parsed.blocked,
+      retryAfter: parsed.retryAfter,
+      banUntil: parsed.banTtl > 0 ? now + parsed.banTtl : undefined,
+    })
+  }
+
+  const hitSliding = async (input: AlgorithmStoreHitInput): Promise<HitResult> => {
+    const { key, limit, window, cost, ban = 0, now } = input
+    const windowStart = Math.floor(now / window) * window
+    const previousWindowStart = windowStart - window
+    const currentKey = keyFor('sliding', key, `w:${windowStart}`)
+    const previousKey = keyFor('sliding', key, `w:${previousWindowStart}`)
+    const banKey = keyFor('ban', key)
+    const currentRaw = await client.incrby(currentKey, cost)
+    const currentCount = toSafeNumber(currentRaw, cost)
+    const currentTtl = toSafeNumber(await client.pttl(currentKey), -1)
+
+    if (currentCount === cost || currentTtl < 0) {
+      await client.pexpire(currentKey, window * 2)
+    }
+
+    const previousCount = toSafeNumber(await client.get(previousKey), 0)
+    const elapsed = now - windowStart
+    const weight = 1 - elapsed / window
+    const count = Math.floor(previousCount * weight + currentCount)
+    let banTtl = 0
+
+    if (ban > 0) {
+      banTtl = Math.max(toSafeNumber(await client.pttl(banKey), 0), 0)
+
+      if (count > limit && banTtl <= 0) {
+        await client.psetex(banKey, ban, '1')
+        banTtl = ban
+      }
+    }
+
+    const resetAt = windowStart + window
+    const blocked = count > limit || banTtl > 0
+
+    return createHitResult(input, {
+      count,
+      resetAt,
+      blocked,
+      retryAfter: blocked ? Math.max(resetAt - now, banTtl) : 0,
+      banUntil: banTtl > 0 ? now + banTtl : undefined,
+    })
+  }
+
+  const hitAlgorithm = async (input: AlgorithmStoreHitInput): Promise<HitResult> => {
+    if (input.algorithm === 'fixed-window') {
+      return hitMulti(input, input.now)
+    }
+
+    if (input.algorithm === 'sliding-window') {
+      return hitSliding(input)
+    }
+
+    if (input.algorithm === 'gcra' && useGcraAtomic) {
+      try {
+        return await hitGcraAtomic(input)
+      } catch (err) {
+        if (isPermanentLuaFailure(err)) {
+          useGcraAtomic = false
+        }
+
+        if (Bun.env.NAZLI_DEBUG === '1') {
+          console.warn('[elysia-nazli] Redis GCRA EVAL failed, using state path:', err)
+        }
+      }
+    }
+
+    const stateKey = keyFor('state', input.key)
+    const current = await readState(stateKey, input.algorithm)
+    const evaluated = evaluateAlgorithmHit(input, current)
+    const ttl = Math.max(Math.ceil(evaluated.expiresAt - input.now), 1)
+
+    await client.psetex(stateKey, ttl, JSON.stringify(evaluated.state))
+
+    return evaluated.hit
   }
 
   return {
     hit: async (input: StoreHitInput): Promise<HitResult> => {
       const now = input.now
+
       if (useAtomic) {
         try {
           return await hitAtomic(input, now)
         } catch (err) {
-          // Permanent fall-back: if Lua is disabled on the server (NOSCRIPT,
-          // restricted commands, etc.) the multi-command path still works.
-          // Subsequent calls go straight to the fallback.
-          useAtomic = false
+          // If Lua is disabled/restricted, keep using the portable path for
+          // this store. Transient EVAL errors fall back only for this request.
+          if (isPermanentLuaFailure(err)) {
+            useAtomic = false
+          }
+
           if (Bun.env.NAZLI_DEBUG === '1') {
-            // eslint-disable-next-line no-console
-            console.warn(
-              '[elysia-nazli] Redis EVAL failed, switching to multi-command path:',
-              err
-            )
+            console.warn('[elysia-nazli] Redis EVAL failed, using multi-command path:', err)
           }
         }
       }
+
       return hitMulti(input, now)
-    }
+    },
+    algorithmHit: hitAlgorithm,
   }
 }

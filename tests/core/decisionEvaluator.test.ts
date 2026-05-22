@@ -1,29 +1,31 @@
 import { describe, expect, it } from 'bun:test'
 import type { Context } from 'elysia'
 
-import { evaluateDecisions } from '../src/core/decisionEvaluator'
-import { MemoryRateLimitStore } from '../src/plugins/memoryStore'
-import type { CompiledRule, HitResult, RateLimitStore, StoreHitInput } from '../src/types'
+import { evaluateDecisions } from '../../src/core/decisionEvaluator'
+import { MemoryRateLimitStore } from '../../src/plugins/memoryStore'
+import type { CompiledRule, HitResult, RateLimitStore, StoreHitInput } from '../../src/types'
 
 const fakeContext = {} as Context
 
 const fakeStore = (label = 'fake'): RateLimitStore & { calls: StoreHitInput[] } => {
   const calls: StoreHitInput[] = []
+
   return {
     calls,
     hit: (input) => {
       calls.push(input)
+
       return {
         key: input.key,
         count: 1,
         remaining: input.limit - 1,
         limit: input.limit,
-        resetAt: input.now + input.windowMs,
+        resetAt: input.now + input.window,
         blocked: false,
-        retryAfterMs: 0,
-        ...({ _label: label } as object)
+        retryAfter: 0,
+        ...({ _label: label } as object),
       }
-    }
+    },
   }
 }
 
@@ -31,8 +33,9 @@ const rule = (over: Partial<CompiledRule>): CompiledRule => ({
   id: 'r',
   type: 'global',
   limit: 10,
-  windowMs: 1000,
-  ...over
+  algorithm: 'fixed-window',
+  window: 1000,
+  ...over,
 })
 
 describe('evaluateDecisions - basic flow', () => {
@@ -44,7 +47,7 @@ describe('evaluateDecisions - basic flow', () => {
       namespace: 'ns',
       baseKey: 'ip:1.1.1.1',
       now: 1_000,
-      ruleStores: new Map([['login', store]])
+      ruleStores: new Map([['login', store]]),
     })
 
     expect(decisions[0]!.key).toBe('ns:login:ip:1.1.1.1')
@@ -54,18 +57,15 @@ describe('evaluateDecisions - basic flow', () => {
   it('skips rules whose own `skip` predicate returns true', async () => {
     const store = fakeStore()
     const { decisions } = await evaluateDecisions({
-      activeRules: [
-        rule({ id: 'a', skip: () => true }),
-        rule({ id: 'b' })
-      ],
+      activeRules: [rule({ id: 'a', skip: () => true }), rule({ id: 'b' })],
       context: fakeContext,
       namespace: 'ns',
       baseKey: 'k',
       now: 0,
       ruleStores: new Map([
         ['a', store],
-        ['b', store]
-      ])
+        ['b', store],
+      ]),
     })
 
     expect(decisions.length).toBe(1)
@@ -80,8 +80,9 @@ describe('evaluateDecisions - basic flow', () => {
       namespace: 'ns',
       baseKey: 'k',
       now: 0,
-      ruleStores: new Map([['a', store]])
+      ruleStores: new Map([['a', store]]),
     })
+
     expect(decisions.length).toBe(0)
   })
 
@@ -92,21 +93,30 @@ describe('evaluateDecisions - basic flow', () => {
       namespace: 'ns',
       baseKey: 'k',
       now: 0,
-      ruleStores: new Map()
+      ruleStores: new Map(),
     })
+
     expect(decisions.length).toBe(0)
   })
 
   it('treats throwing skip predicates as "do not skip" (fail-safe)', async () => {
     const store = fakeStore()
     const { decisions } = await evaluateDecisions({
-      activeRules: [rule({ id: 'a', skip: () => { throw new Error('boom') } })],
+      activeRules: [
+        rule({
+          id: 'a',
+          skip: () => {
+            throw new Error('boom')
+          },
+        }),
+      ],
       context: fakeContext,
       namespace: 'ns',
       baseKey: 'k',
       now: 0,
-      ruleStores: new Map([['a', store]])
+      ruleStores: new Map([['a', store]]),
     })
+
     expect(decisions.length).toBe(1)
     expect(store.calls.length).toBe(1)
   })
@@ -115,18 +125,19 @@ describe('evaluateDecisions - basic flow', () => {
     const slow: RateLimitStore = {
       hit: async (input) => {
         await new Promise((r) => setTimeout(r, 5))
+
         return {
           key: input.key,
           count: 1,
           remaining: 0,
           limit: input.limit,
-          resetAt: input.now + input.windowMs,
+          resetAt: input.now + input.window,
           blocked: false,
-          retryAfterMs: 0
+          retryAfter: 0,
         }
-      }
+      },
     }
-    const { storeLatencyMs } = await evaluateDecisions({
+    const { storeLatency } = await evaluateDecisions({
       activeRules: [rule({ id: 'a' }), rule({ id: 'b' })],
       context: fakeContext,
       namespace: 'ns',
@@ -134,62 +145,65 @@ describe('evaluateDecisions - basic flow', () => {
       now: 0,
       ruleStores: new Map([
         ['a', slow],
-        ['b', slow]
-      ])
+        ['b', slow],
+      ]),
     })
-    // Two sequential 5ms calls → at least 10ms.
-    expect(storeLatencyMs).toBeGreaterThanOrEqual(9)
+
+    expect(storeLatency).toBeGreaterThanOrEqual(9)
   })
 
-  it('forwards limit, windowMs, cost, banMs, now to the store', async () => {
+  it('forwards limit, window, cost, ban, now to the store', async () => {
     const store = fakeStore()
+
     await evaluateDecisions({
-      activeRules: [rule({ id: 'r', limit: 7, windowMs: 5000, cost: 3, banMs: 9000 })],
+      activeRules: [rule({ id: 'r', limit: 7, window: 5000, cost: 3, ban: 9000 })],
       context: fakeContext,
       namespace: 'ns',
       baseKey: 'k',
       now: 1234,
-      ruleStores: new Map([['r', store]])
+      ruleStores: new Map([['r', store]]),
     })
 
     expect(store.calls[0]).toEqual({
       key: 'ns:r:k',
       limit: 7,
-      windowMs: 5000,
+      window: 5000,
       cost: 3,
-      banMs: 9000,
-      now: 1234
+      ban: 9000,
+      now: 1234,
     })
   })
 
   it('defaults cost to 1 when rule.cost is undefined', async () => {
     const store = fakeStore()
+
     await evaluateDecisions({
       activeRules: [rule({ id: 'r' })],
       context: fakeContext,
       namespace: 'ns',
       baseKey: 'k',
       now: 0,
-      ruleStores: new Map([['r', store]])
+      ruleStores: new Map([['r', store]]),
     })
     expect(store.calls[0]!.cost).toBe(1)
   })
 })
 
-describe('evaluateDecisions - storeTimeoutMs', () => {
-  const slowStore = (delayMs: number): RateLimitStore => ({
+describe('evaluateDecisions - storeTimeout', () => {
+  const slowStore = (delay: number): RateLimitStore => ({
     hit: async (input) => {
-      await new Promise((r) => setTimeout(r, delayMs))
+      await new Promise((r) => setTimeout(r, delay))
+
       return {
         key: input.key,
         count: 1,
         remaining: input.limit - 1,
         limit: input.limit,
-        resetAt: input.now + input.windowMs,
+        resetAt: input.now + input.window,
         blocked: false,
-        retryAfterMs: 0
+        retryAfter: 0,
       }
-    }
+    },
   })
 
   it('drops a rule whose store call exceeds the timeout (default fail-open)', async () => {
@@ -200,32 +214,33 @@ describe('evaluateDecisions - storeTimeoutMs', () => {
       baseKey: 'k',
       now: 0,
       ruleStores: new Map([['slow', slowStore(50)]]),
-      storeTimeoutMs: 5
+      storeTimeout: 5,
     })
+
     expect(decisions.length).toBe(0)
   })
 
   it('synthesizes a block when timeout occurs and policy is "block"', async () => {
     const { decisions } = await evaluateDecisions({
-      activeRules: [rule({ id: 'slow', limit: 5, windowMs: 60_000 })],
+      activeRules: [rule({ id: 'slow', limit: 5, window: 60_000 })],
       context: fakeContext,
       namespace: 'ns',
       baseKey: 'k',
       now: 1_000,
       ruleStores: new Map([['slow', slowStore(50)]]),
-      storeTimeoutMs: 5,
-      onStoreError: 'block'
+      storeTimeout: 5,
+      onStoreError: 'block',
     })
 
     expect(decisions.length).toBe(1)
     expect(decisions[0]!.blocked).toBeTrue()
     expect(decisions[0]!.limit).toBe(5)
     expect(decisions[0]!.remaining).toBe(0)
-    expect(decisions[0]!.retryAfterMs).toBe(60_000)
+    expect(decisions[0]!.retryAfter).toBe(60_000)
     expect(decisions[0]!.resetAt).toBe(61_000)
   })
 
-  it('disables timeout when storeTimeoutMs is 0 or undefined', async () => {
+  it('disables timeout when storeTimeout is 0 or undefined', async () => {
     const { decisions } = await evaluateDecisions({
       activeRules: [rule({ id: 'slow' })],
       context: fakeContext,
@@ -233,8 +248,9 @@ describe('evaluateDecisions - storeTimeoutMs', () => {
       baseKey: 'k',
       now: 0,
       ruleStores: new Map([['slow', slowStore(15)]]),
-      storeTimeoutMs: 0
+      storeTimeout: 0,
     })
+
     expect(decisions.length).toBe(1)
   })
 })
@@ -243,7 +259,7 @@ describe('evaluateDecisions - onStoreError', () => {
   const throwingStore: RateLimitStore = {
     hit: () => {
       throw new Error('redis is on fire')
-    }
+    },
   }
 
   it("default policy 'allow' drops the failing rule and serves the request", async () => {
@@ -253,25 +269,27 @@ describe('evaluateDecisions - onStoreError', () => {
       namespace: 'ns',
       baseKey: 'k',
       now: 0,
-      ruleStores: new Map([['a', throwingStore]])
+      ruleStores: new Map([['a', throwingStore]]),
     })
+
     expect(decisions.length).toBe(0)
   })
 
   it("policy 'block' synthesizes a 429 decision on store failure", async () => {
     const { decisions } = await evaluateDecisions({
-      activeRules: [rule({ id: 'a', limit: 3, windowMs: 1000 })],
+      activeRules: [rule({ id: 'a', limit: 3, window: 1000 })],
       context: fakeContext,
       namespace: 'ns',
       baseKey: 'k',
       now: 100,
       ruleStores: new Map([['a', throwingStore]]),
-      onStoreError: 'block'
+      onStoreError: 'block',
     })
+
     expect(decisions.length).toBe(1)
     expect(decisions[0]!.blocked).toBeTrue()
     expect(decisions[0]!.ruleId).toBe('a')
-    expect(decisions[0]!.retryAfterMs).toBe(1000)
+    expect(decisions[0]!.retryAfter).toBe(1000)
   })
 
   it("function policy receives the rule, key, error, and attempt: 'primary'", async () => {
@@ -285,8 +303,9 @@ describe('evaluateDecisions - onStoreError', () => {
       ruleStores: new Map([['a', throwingStore]]),
       onStoreError: ({ rule: r, key, error, attempt }) => {
         captured = { ruleId: r.id, key, error, attempt }
+
         return 'allow'
-      }
+      },
     })
 
     expect(decisions.length).toBe(0)
@@ -311,18 +330,19 @@ describe('evaluateDecisions - onStoreError', () => {
         remaining: 0,
         count: 1,
         resetAt: 999,
-        retryAfterMs: 42,
-        blocked: false
-      })
+        retryAfter: 42,
+        blocked: false,
+      }),
     })
+
     expect(decisions.length).toBe(1)
-    expect(decisions[0]!.retryAfterMs).toBe(42)
+    expect(decisions[0]!.retryAfter).toBe(42)
     expect(decisions[0]!.blocked).toBeFalse()
   })
 
   it('treats a malformed hit() result like a throwing store (fail-open)', async () => {
     const malformed: RateLimitStore = {
-      hit: () => Promise.resolve({} as HitResult)
+      hit: () => Promise.resolve({} as HitResult),
     }
     const { decisions } = await evaluateDecisions({
       activeRules: [rule({ id: 'malHit' })],
@@ -330,8 +350,9 @@ describe('evaluateDecisions - onStoreError', () => {
       namespace: 'ns',
       baseKey: 'k',
       now: 0,
-      ruleStores: new Map([['malHit', malformed]])
+      ruleStores: new Map([['malHit', malformed]]),
     })
+
     expect(decisions.length).toBe(0)
   })
 
@@ -345,14 +366,23 @@ describe('evaluateDecisions - onStoreError', () => {
       baseKey: 'fb-mal',
       now: 0,
       ruleStores: new Map([
-        ['a', { hit: () => { throw new Error('primary-down') } }]
+        [
+          'a',
+          {
+            hit: () => {
+              throw new Error('primary-down')
+            },
+          },
+        ],
       ]),
       fallbackStore: fallbackBad,
       onStoreError: (ctx) => {
         attempt = ctx.attempt
+
         return 'allow'
-      }
+      },
     })
+
     expect(decisions.length).toBe(0)
     expect(attempt).toBe('fallback')
   })
@@ -367,8 +397,9 @@ describe('evaluateDecisions - onStoreError', () => {
       ruleStores: new Map([['a', throwingStore]]),
       onStoreError: () => {
         throw new Error('handler exploded')
-      }
+      },
     })
+
     expect(decisions.length).toBe(0)
   })
 })
@@ -380,17 +411,17 @@ describe('evaluateDecisions - fallbackStore', () => {
     const primary: RateLimitStore = {
       hit: () => {
         throw new Error('db down')
-      }
+      },
     }
     const { decisions } = await evaluateDecisions({
-      activeRules: [rule({ id: 'r', limit: 2, windowMs: 1000 })],
+      activeRules: [rule({ id: 'r', limit: 2, window: 1000 })],
       context: fakeContext,
       namespace: 'ns',
       baseKey: 'k',
       now: Date.now(),
       ruleStores: new Map([['r', primary]]),
       fallbackStore: goodMemory,
-      onStoreError: 'block'
+      onStoreError: 'block',
     })
 
     expect(decisions.length).toBe(1)
@@ -403,11 +434,11 @@ describe('evaluateDecisions - fallbackStore', () => {
     const shared: RateLimitStore = {
       hit: () => {
         throw new Error('boom')
-      }
+      },
     }
     let attempt: string | undefined
     const { decisions } = await evaluateDecisions({
-      activeRules: [rule({ id: 'r', limit: 2, windowMs: 1000 })],
+      activeRules: [rule({ id: 'r', limit: 2, window: 1000 })],
       context: fakeContext,
       namespace: 'ns',
       baseKey: 'k',
@@ -416,20 +447,30 @@ describe('evaluateDecisions - fallbackStore', () => {
       fallbackStore: shared,
       onStoreError: (ctx) => {
         attempt = ctx.attempt
+
         return 'allow'
-      }
+      },
     })
+
     expect(decisions.length).toBe(0)
     expect(attempt).toBe('primary')
   })
 
   it('calls onStoreError with attempt "fallback" and primaryError when both stores fail', async () => {
-    const primary: RateLimitStore = { hit: () => { throw new Error('primary') } }
-    const fallback: RateLimitStore = { hit: () => { throw new Error('fallback') } }
+    const primary: RateLimitStore = {
+      hit: () => {
+        throw new Error('primary')
+      },
+    }
+    const fallback: RateLimitStore = {
+      hit: () => {
+        throw new Error('fallback')
+      },
+    }
     let captured: { attempt?: string; primaryError?: unknown; error?: unknown } = {}
 
     const { decisions } = await evaluateDecisions({
-      activeRules: [rule({ id: 'r', limit: 2, windowMs: 1000 })],
+      activeRules: [rule({ id: 'r', limit: 2, window: 1000 })],
       context: fakeContext,
       namespace: 'ns',
       baseKey: 'k',
@@ -440,10 +481,11 @@ describe('evaluateDecisions - fallbackStore', () => {
         captured = {
           attempt: ctx.attempt,
           primaryError: ctx.primaryError,
-          error: ctx.error
+          error: ctx.error,
         }
+
         return 'allow'
-      }
+      },
     })
 
     expect(decisions.length).toBe(0)
@@ -457,18 +499,18 @@ describe('evaluateDecisions - fallbackStore', () => {
     const malformed: RateLimitStore = {
       hit: async () =>
         ({
-          incomplete: true
-        }) as unknown as HitResult
+          incomplete: true,
+        }) as unknown as HitResult,
     }
     const { decisions } = await evaluateDecisions({
-      activeRules: [rule({ id: 'rMal', limit: 2, windowMs: 1000 })],
+      activeRules: [rule({ id: 'rMal', limit: 2, window: 1000 })],
       context: fakeContext,
       namespace: 'ns',
       baseKey: 'isolated',
       now: Date.now(),
       ruleStores: new Map([['rMal', malformed]]),
       fallbackStore: isolatedFallback,
-      onStoreError: 'block'
+      onStoreError: 'block',
     })
 
     expect(decisions.length).toBe(1)

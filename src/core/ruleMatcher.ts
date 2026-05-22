@@ -7,8 +7,11 @@ const prefixMatches = (path: string, prefix: string) =>
 export const getActiveRules = (rules: CompiledRule[], method: string, path: string) => {
   return rules.filter((rule) => {
     if (!methodMatches(method, rule.methodSet)) return false
+
     if (rule.type === 'prefix') return prefixMatches(path, rule.prefix!)
+
     if (rule.type === 'route') return pathMatches(path, rule.path!)
+
     return true
   })
 }

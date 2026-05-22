@@ -1,36 +1,71 @@
-# elysia-nazli — documentation
+# Documentation
 
-Welcome. These guides go deeper than the [project README](../README.md).
+These guides expand on the root [README](../README.md). Start with examples if you want to copy a working setup, then use the reference pages when you need exact behavior.
 
-## Contents
+## Choose a guide
 
-| Guide | What you’ll find |
-|--------|------------------|
-| [Algorithm & rule semantics](./algorithm.md) | Fixed-window behavior, how rules stack, blocking vs headers, bans |
-| [Stores & backends](./stores.md) | Memory, SQLite, Redis, hybrid per-route, custom `RateLimitStore` |
-| [Configuration reference](./configuration.md) | Every plugin option, defaults, validation rules |
-| [Production & resilience](./production.md) | `onStoreError`, `fallbackStore`, timeouts, observability, Redis atomic mode, scaling |
-| [Examples & patterns](./examples.md) | Full production-style config, keying strategies, JWT / IP caveats |
+| Guide                                         | Best for                                                          |
+| --------------------------------------------- | ----------------------------------------------------------------- |
+| [Examples and patterns](./examples.md)        | Getting productive quickly, protecting auth routes, choosing keys |
+| [Configuration reference](./configuration.md) | Every option, default, validation rule, and header setting        |
+| [Stores and backends](./stores.md)            | Memory, SQLite, Redis, custom stores, hybrid storage              |
+| [Algorithms and semantics](./algorithm.md)    | Fixed-window, sliding-window, token-bucket, GCRA, matching rules  |
+| [Production and resilience](./production.md)  | Store failures, fallbacks, timeouts, proxies, scaling, lifecycle  |
+
+## Recommended reading path
+
+1. Read the root [README](../README.md) for the 60-second overview.
+2. Copy a setup from [Examples and patterns](./examples.md).
+3. Check [Configuration reference](./configuration.md) when you need exact option names.
+4. Review [Production and resilience](./production.md) before using Redis, proxies, or multiple replicas.
+
+## Important defaults
+
+| Area                 | Default                                                         |
+| -------------------- | --------------------------------------------------------------- |
+| Runtime target       | Bun                                                             |
+| Algorithm            | `fixed-window`                                                  |
+| Store                | Process-local memory                                            |
+| Headers              | Standard `ratelimit-*` enabled, legacy `x-ratelimit-*` disabled |
+| Store failure policy | `onStoreError: 'allow'`                                         |
+| Cleanup interval     | `60_000` ms                                                     |
 
 ## Upgrade notes
 
-- Prefix matching is path-segment aware: `/users` no longer matches `/userspaces`.
-- Prefix trailing slashes are normalized: `/users/` behaves like `/users`, including matching the bare `/users` path.
-- When multiple rules block, `blockedBy` and `retry-after` use the strictest blocked decision, not the first blocking rule in compile order.
+- Prefix matching is path-segment aware: `/users` matches `/users` and `/users/42`, but not `/userspaces`.
+- Prefix trailing slashes are normalized: `/users/` behaves like `/users`.
+- When multiple rules block, `blockedBy`, `retry-after`, and 429 headers use the strictest blocked decision.
+- `fixed-window` remains the default algorithm. Other algorithms are opt-in per plugin or per rule.
+- `rateLimit()` with no plugin-level rules is a no-op unless you attach route-level `{ rateLimit: { ... } }` options.
+- `keyGenerator`, `standardHeaders`, and `legacyHeaders` remain supported for compatibility. Prefer `key` and `headers` in new code.
 
 ## Benchmarks
 
-From the repository root:
+Run the benchmark suite from the repository root:
 
 ```bash
 bun run bench
 ```
 
-- On-disk SQLite (`BENCH_SQLITE_PATH`, default under `./tmp/bench/`) is **removed after the run** unless you pass `--keep` or `BENCH_KEEP=1`.
-- In-memory SQLite for the benchmark: `BENCH_SQLITE_PATH=:memory: bun run bench`
-- **Custom stores:** pass a module (or set `BENCH_MODULE`) that exports `benchStores`. See [`examples/bench.stores.example.ts`](../examples/bench.stores.example.ts) and [`src/benchmark.ts`](../src/benchmark.ts). Flag: `--no-builtin-stores` (only your stores).
+Useful variants:
 
-## Quick links
+```bash
+BENCH_SQLITE_PATH=:memory: bun run bench
+bun run bench:help
+bun run bench:example
+bun run bench:compare
+```
 
-- **Repository:** see root [README](../README.md) for install, minimal quick start, and npm scripts.
-- **License:** [LICENSE](../LICENSE)
+Notes:
+
+- On-disk SQLite benchmark files use `BENCH_SQLITE_PATH` and are removed after the run unless you pass `--keep` or set `BENCH_KEEP=1`.
+- Custom benchmark stores can be loaded with `BENCH_MODULE` or `-m`.
+- `bun run bench:compare` compares `elysia-nazli`, `elysia-rate-limit`, and plain Elysia lifecycle/header baselines through `app.handle()` allowed-request loops.
+- See [examples/bench.stores.example.ts](../examples/bench.stores.example.ts) for the `benchStores` export shape.
+
+## Project links
+
+- [Repository README](../README.md)
+- [Contributing](../CONTRIBUTING.md)
+- [Security](../SECURITY.md)
+- [License](../LICENSE)

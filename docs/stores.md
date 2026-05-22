@@ -1,109 +1,302 @@
-# Stores & backends
+# Stores and Backends
 
-All stores implement **`RateLimitStore`**: a synchronous or async `hit(input)` returning **`HitResult`**.  
-Optional hooks: **`cleanup?(now)`**, **`close?()`**.
+Stores hold rate-limit state. The default store is process-local memory, which is great for development and single-process apps. Use Redis or another shared store when limits must be consistent across multiple replicas.
 
-## In-memory (process-local)
+## Store contract
 
-Default when you omit a store or use typed config `{ type: 'memory' }`.
-
-```ts
-rateLimit({
-  store: { type: 'memory' }
-})
-```
-
-Optional cap against cardinality abuse (see [configuration](./configuration.md) for `maxEntries` on typed memory config, or pass `new MemoryRateLimitStore({ maxEntries })` as a custom store).
-
-**Limits:** Counters are **not** shared across processes or machines. Restart clears state (unless you use SQLite/Redis).
-
-## SQLite (durable, single instance)
-
-Good for one Bun process (or one machine) needing persistence without Redis.
-
-```ts
-rateLimit({
-  store: {
-    type: 'sqlite',
-    path: './rate-limit.db',
-    tableName: 'elysia_rate_limit'
-  }
-})
-```
-
-- **Not** a distributed store: do not expect shared counts across many replicas.
-- **Table names** are validated to reduce SQL injection via identifier; invalid names throw at construction.
-- `:memory:` paths skip WAL pragma (no-op for in-memory DBs).
-
-## Redis (Bun)
-
-Use **`createBunRedisStore`** with Bun’s Redis client (or a test double implementing the narrow client interface).
-
-```ts
-import { RedisClient } from 'bun'
-import { createBunRedisStore, rateLimit } from 'elysia-nazli'
-
-const redisStore = createBunRedisStore({
-  client: new RedisClient('redis://localhost:6379'),
-  prefix: 'myapp'
-})
-
-rateLimit({
-  store: redisStore
-})
-```
-
-When the client exposes **`eval`** or **`send`**, the store uses a **Lua script** for one round-trip atomic **INCR + TTL + ban** per hit; otherwise it uses a multi-command path. See [production](./production.md) for failure and atomicity details.
-
-## Hybrid: different store per route
-
-The default `store` applies to rules that don’t override `store`. Per-rule `store` sends specific traffic to Redis, SQLite, or a custom adapter.
-
-```ts
-import { createBunRedisStore, rateLimit } from 'elysia-nazli'
-
-const authStore = createBunRedisStore({ prefix: 'auth-login' })
-
-rateLimit({
-  store: { type: 'memory' },
-  routes: [
-    {
-      id: 'login',
-      path: '/users/login',
-      method: 'POST',
-      limit: 10,
-      windowMs: 15 * 60_000,
-      store: authStore
-    }
-  ]
-})
-```
-
-## Custom store
-
-Implement **`RateLimitStore`** and pass the object as `store` or as a rule’s `store`.
+Every store implements `RateLimitStore`:
 
 ```ts
 import type { HitResult, RateLimitStore, StoreHitInput } from 'elysia-nazli'
 
-const customStore: RateLimitStore = {
+const store: RateLimitStore = {
   hit(input: StoreHitInput): HitResult {
     return {
       key: input.key,
-      count: 1,
-      remaining: input.limit - 1,
+      count: input.cost,
+      remaining: input.limit - input.cost,
       limit: input.limit,
-      resetAt: input.now + input.windowMs,
+      resetAt: input.now + input.window,
       blocked: false,
-      retryAfterMs: 0
+      retryAfter: 0,
     }
-  }
+  },
 }
 ```
 
-`hit` receives:
+Optional hooks:
 
-- **`key`** — already namespaced (`namespace:ruleId:baseKey`)
-- **`limit`**, **`windowMs`**, **`cost`**, **`banMs`**, **`now`**
+| Hook                  | Purpose                                               |
+| --------------------- | ----------------------------------------------------- |
+| `algorithmHit(input)` | Supports `sliding-window`, `token-bucket`, and `gcra` |
+| `cleanup(now)`        | Removes expired state                                 |
+| `close()`             | Releases resources on Elysia stop                     |
 
-Your implementation must return consistent **`remaining`**, **`blocked`**, and **`retryAfterMs`** for correct headers and 429 behavior.
+`hit()` receives normalized millisecond fields and a fully namespaced key: `<namespace>:<ruleId>:<baseKey>`.
+
+## Memory store
+
+Memory is the default when you omit `store`.
+
+```ts
+import { memoryStore, rateLimit } from 'elysia-nazli'
+
+rateLimit({
+  store: memoryStore(),
+  limit: 120,
+  window: '1m',
+})
+```
+
+Set a cap to limit cardinality growth:
+
+```ts
+rateLimit({
+  store: memoryStore({ maxEntries: 50_000 }),
+  limit: 120,
+  window: '1m',
+})
+```
+
+Memory store notes:
+
+- State is not shared across processes or machines.
+- Restarting the process clears counters.
+- `maxEntries` defaults to `100_000`.
+- `maxEntries: 0` disables the cap.
+- Eviction removes expired rows first, then oldest keys.
+
+## SQLite store
+
+SQLite is useful for a single Bun process or one machine that needs durable counters without Redis.
+
+```ts
+import { rateLimit } from 'elysia-nazli'
+import { sqliteStore } from 'elysia-nazli/sqlite'
+
+rateLimit({
+  store: sqliteStore({
+    path: './rate-limit.db',
+    tableName: 'elysia_rate_limit',
+    wal: true,
+    busyTimeout: '250ms',
+  }),
+  limit: 120,
+  window: '1m',
+})
+```
+
+Short form:
+
+```ts
+rateLimit({
+  store: sqliteStore('./rate-limit.db'),
+  limit: 120,
+  window: '1m',
+})
+```
+
+SQLite options:
+
+| Option        | Default               | Description                                                |
+| ------------- | --------------------- | ---------------------------------------------------------- |
+| `path`        | `'./rate-limit.db'`   | Database path. Use `':memory:'` for in-memory SQLite.      |
+| `tableName`   | `'elysia_rate_limit'` | Table name. Invalid identifiers throw during construction. |
+| `wal`         | `true`                | Enables WAL mode except for `':memory:'`.                  |
+| `busyTimeout` | -                     | SQLite busy timeout as milliseconds or duration string.    |
+
+SQLite store notes:
+
+- It is not a distributed store.
+- It works best for one process or one box.
+- It implements `algorithmHit()` for advanced algorithms.
+- `cleanup(now)` removes expired rows.
+
+## Redis store
+
+Redis is the recommended built-in store for horizontally scaled services.
+
+```ts
+import { RedisClient } from 'bun'
+import { rateLimit } from 'elysia-nazli'
+import { createRedisStore, redisStore } from 'elysia-nazli/redis'
+
+const redis = new RedisClient('redis://localhost:6379')
+
+rateLimit({
+  store: redisStore({ client: redis, prefix: 'myapp' }),
+  limit: 120,
+  window: '1m',
+})
+```
+
+You can pass a client directly:
+
+```ts
+rateLimit({
+  store: redisStore(redis),
+  limit: 120,
+  window: '1m',
+})
+```
+
+`redisStore(...)` is the ergonomic helper. `createRedisStore(...)` is the same
+portable factory with a more explicit name.
+
+Adapter mode is inferred when possible. Set it explicitly when structural detection is ambiguous:
+
+```ts
+redisStore({ client, adapter: 'bun' })
+redisStore({ client, adapter: 'ioredis' })
+redisStore({ client, adapter: 'node-redis' })
+redisStore({ client, adapter: 'custom' })
+```
+
+Node Redis example:
+
+```ts
+import { createClient } from 'redis'
+import { rateLimit } from 'elysia-nazli'
+import { redisStore } from 'elysia-nazli/redis'
+
+const client = createClient({ url: process.env.REDIS_URL })
+await client.connect()
+
+rateLimit({
+  store: redisStore({
+    client,
+    adapter: 'node-redis',
+    prefix: 'myapp',
+  }),
+  limit: 120,
+  window: '1m',
+})
+```
+
+Redis options:
+
+| Option                | Default                    | Description                                             |
+| --------------------- | -------------------------- | ------------------------------------------------------- |
+| `client`              | Bun's default Redis client | Redis-like client instance.                             |
+| `prefix`              | `'nazli'`                  | Prefix used inside Redis keys.                          |
+| `adapter`             | `'auto'`                   | `auto`, `bun`, `ioredis`, `node-redis`, or `custom`.    |
+| `clusterHashTag`      | `true`                     | Keeps related keys in one Redis Cluster hash slot.      |
+| `disableAtomicScript` | `false`                    | Forces multi-command behavior even if Lua is available. |
+
+Required client methods depend on the algorithms you use:
+
+| Behavior                   | Methods                                                                                      |
+| -------------------------- | -------------------------------------------------------------------------------------------- |
+| Fixed-window multi-command | `incrby`/`incrBy`, `pexpire`/`pExpire`, `pttl`/`pTTL`, `psetex`/`pSetEx` or compatible `set` |
+| Fixed-window Lua path      | Fixed-window methods plus `eval`, `send`, or `sendCommand`                                   |
+| Sliding-window             | Fixed-window methods plus `get`                                                              |
+| GCRA Lua path              | `eval`, `send`, or `sendCommand`                                                             |
+| Token-bucket portable path | `get` and `psetex`/`pSetEx` or compatible `set`                                              |
+
+Redis behavior:
+
+- Fixed-window and GCRA prefer Lua-backed atomic paths when available.
+- If Lua appears disabled or restricted, the store switches to portable
+  command/state paths for that store instance. Transient EVAL failures fall back
+  only for that request.
+- Sliding-window uses Redis counters.
+- Token-bucket uses portable state writes for compatibility.
+- For Redis Cluster, related keys use the same hash tag by default. Set
+  `clusterHashTag: false` only if you need the legacy physical key layout.
+
+## Hybrid stores
+
+The plugin-level `store` applies to every rule that does not override it.
+
+```ts
+import { memoryStore, rateLimit } from 'elysia-nazli'
+import { redisStore } from 'elysia-nazli/redis'
+import { sqliteStore } from 'elysia-nazli/sqlite'
+
+rateLimit({
+  store: memoryStore(),
+  limit: 120,
+  window: '1m',
+  routes: {
+    'POST /login': {
+      limit: 10,
+      window: '15m',
+      store: redisStore({ client: redis, prefix: 'auth-login' }),
+    },
+    'POST /webhooks/ingest': {
+      limit: 60,
+      window: '1m',
+      store: sqliteStore('./webhooks.sqlite'),
+    },
+  },
+})
+```
+
+Use hybrid storage when some traffic needs stronger consistency or durability than the rest of the API.
+
+## Fallback stores
+
+`fallbackStore` is not a replica. It is a secondary store tried once when the primary store throws or exceeds `storeTimeout`.
+
+```ts
+rateLimit({
+  store: redisStore({ client: redis }),
+  fallbackStore: true,
+  onStoreError: 'allow',
+  limit: 120,
+  window: '1m',
+})
+```
+
+`fallbackStore: true` creates a bounded process-local memory store. You can also provide `{ type: 'memory', maxEntries: 50_000 }` or any custom `RateLimitStore`.
+
+See [Production and resilience](./production.md) for failure-mode behavior.
+
+## Custom store
+
+Implement `hit()` for fixed-window behavior:
+
+```ts
+import type { HitResult, RateLimitStore, StoreHitInput } from 'elysia-nazli'
+
+export const customStore: RateLimitStore = {
+  hit(input: StoreHitInput): HitResult {
+    const resetAt = input.now + input.window
+
+    return {
+      key: input.key,
+      count: input.cost,
+      remaining: Math.max(input.limit - input.cost, 0),
+      limit: input.limit,
+      resetAt,
+      blocked: input.cost > input.limit,
+      retryAfter: input.cost > input.limit ? input.window : 0,
+    }
+  },
+}
+```
+
+To support advanced algorithms, also implement `algorithmHit(input)`:
+
+```ts
+const customStore: RateLimitStore = {
+  hit: fixedWindowHit,
+  algorithmHit: async (input) => {
+    // input.algorithm is 'fixed-window', 'sliding-window', 'token-bucket', or 'gcra'
+    return runYourStrategy(input)
+  },
+}
+```
+
+If a rule selects a non-fixed algorithm and its store lacks `algorithmHit()`, `rateLimit()` throws during construction.
+
+## Choosing a store
+
+| Use case                                     | Store        |
+| -------------------------------------------- | ------------ |
+| Local development                            | Memory       |
+| Single Bun process with durable counters     | SQLite       |
+| Multiple processes or replicas               | Redis        |
+| Existing infrastructure or special semantics | Custom store |
+
+For production systems, also decide your failure policy: fail open with `onStoreError: 'allow'`, fail closed with `'block'`, or use a function for route-specific behavior.

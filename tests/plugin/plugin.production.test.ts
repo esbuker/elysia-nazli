@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'bun:test'
 import { Elysia } from 'elysia'
 
-import { rateLimit } from '../src/index'
+import { rateLimit } from '../../src/index'
 import type {
   OnDecisionContext,
   RateLimitDecision,
   RateLimitStore,
-  StoreErrorContext
-} from '../src/index'
+  StoreErrorContext,
+} from '../../src/index'
 
 const passingStore = (): RateLimitStore => ({
   hit: (input) => ({
@@ -15,10 +15,10 @@ const passingStore = (): RateLimitStore => ({
     count: 1,
     remaining: input.limit - 1,
     limit: input.limit,
-    resetAt: input.now + input.windowMs,
+    resetAt: input.now + input.window,
     blocked: false,
-    retryAfterMs: 0
-  })
+    retryAfter: 0,
+  }),
 })
 
 const blockingStore = (): RateLimitStore => ({
@@ -27,27 +27,27 @@ const blockingStore = (): RateLimitStore => ({
     count: input.limit + 1,
     remaining: 0,
     limit: input.limit,
-    resetAt: input.now + input.windowMs,
+    resetAt: input.now + input.window,
     blocked: true,
-    retryAfterMs: input.windowMs
-  })
+    retryAfter: input.window,
+  }),
 })
 
 const throwingStore = (message = 'kapow'): RateLimitStore => ({
   hit: () => {
     throw new Error(message)
-  }
+  },
 })
 
-describe('rateLimit plugin (production) - storeTimeoutMs validation', () => {
-  it('rejects negative or non-finite storeTimeoutMs', () => {
-    expect(() => rateLimit({ storeTimeoutMs: -1 })).toThrow(/storeTimeoutMs/)
-    expect(() => rateLimit({ storeTimeoutMs: NaN })).toThrow(/storeTimeoutMs/)
-    expect(() => rateLimit({ storeTimeoutMs: Infinity })).toThrow(/storeTimeoutMs/)
+describe('rateLimit plugin (production) - storeTimeout validation', () => {
+  it('rejects negative or non-finite storeTimeout', () => {
+    expect(() => rateLimit({ storeTimeout: -1 })).toThrow(/storeTimeout/)
+    expect(() => rateLimit({ storeTimeout: NaN })).toThrow(/storeTimeout/)
+    expect(() => rateLimit({ storeTimeout: Infinity })).toThrow(/storeTimeout/)
   })
 
   it('accepts 0 (means: no timeout)', () => {
-    expect(() => rateLimit({ storeTimeoutMs: 0 })).not.toThrow()
+    expect(() => rateLimit({ storeTimeout: 0 })).not.toThrow()
   })
 })
 
@@ -56,18 +56,18 @@ describe('rateLimit plugin (production) - onStoreError', () => {
     const app = new Elysia()
       .use(
         rateLimit({
-          global: { id: 'g', limit: 1, windowMs: 60_000 },
+          global: { id: 'g', limit: 1, window: 60_000 },
           store: throwingStore(),
-          cleanupIntervalMs: 0,
-          keyGenerator: () => 'k'
-        })
+          cleanupInterval: 0,
+          keyGenerator: () => 'k',
+        }),
       )
       .get('/x', () => 'ok')
 
     const res = await app.handle(new Request('http://localhost/x'))
+
     expect(res.status).toBe(200)
     expect(await res.text()).toBe('ok')
-    // No rate limit headers since the rule was dropped.
     expect(res.headers.get('ratelimit-limit')).toBeNull()
   })
 
@@ -75,16 +75,17 @@ describe('rateLimit plugin (production) - onStoreError', () => {
     const app = new Elysia()
       .use(
         rateLimit({
-          global: { id: 'g', limit: 5, windowMs: 60_000 },
+          global: { id: 'g', limit: 5, window: 60_000 },
           store: throwingStore(),
           onStoreError: 'block',
-          cleanupIntervalMs: 0,
-          keyGenerator: () => 'k'
-        })
+          cleanupInterval: 0,
+          keyGenerator: () => 'k',
+        }),
       )
       .get('/x', () => 'ok')
 
     const res = await app.handle(new Request('http://localhost/x'))
+
     expect(res.status).toBe(429)
     expect(res.headers.get('retry-after')).not.toBeNull()
     expect(res.headers.get('ratelimit-limit')).toBe('5')
@@ -97,15 +98,16 @@ describe('rateLimit plugin (production) - onStoreError', () => {
       .use(
         rateLimit({
           namespace: 'fn-policy',
-          global: { id: 'g', limit: 9, windowMs: 60_000 },
+          global: { id: 'g', limit: 9, window: 60_000 },
           store: throwingStore('redis down'),
           onStoreError: (info) => {
             captured = info
+
             return 'block'
           },
-          cleanupIntervalMs: 0,
-          keyGenerator: () => 'k-base'
-        })
+          cleanupInterval: 0,
+          keyGenerator: () => 'k-base',
+        }),
       )
       .get('/x', () => 'ok')
 
@@ -121,61 +123,163 @@ describe('rateLimit plugin (production) - onStoreError', () => {
     const app = new Elysia()
       .use(
         rateLimit({
-          global: { id: 'g', limit: 100, windowMs: 60_000, store: passingStore() },
+          global: { id: 'g', limit: 100, window: 60_000, store: passingStore() },
           routes: [
             {
               id: 'broken',
               path: '/broken',
               method: 'GET',
               limit: 1,
-              windowMs: 60_000,
-              store: throwingStore()
-            }
+              window: 60_000,
+              store: throwingStore(),
+            },
           ],
           onStoreError: 'allow',
-          cleanupIntervalMs: 0,
-          keyGenerator: () => 'k'
-        })
+          cleanupInterval: 0,
+          keyGenerator: () => 'k',
+        }),
       )
       .get('/broken', () => 'ok')
 
     const res = await app.handle(new Request('http://localhost/broken'))
+
     expect(res.status).toBe(200)
-    // Global rule survived → its headers are written.
     expect(res.headers.get('ratelimit-limit')).toBe('100')
+  })
+
+  it('allows per-rule onStoreError to override the global policy', async () => {
+    const app = new Elysia()
+      .use(
+        rateLimit({
+          global: {
+            id: 'login',
+            limit: 5,
+            window: 60_000,
+            store: throwingStore(),
+            onStoreError: 'block',
+          },
+          onStoreError: 'allow',
+          cleanupInterval: 0,
+          keyGenerator: () => 'k',
+        }),
+      )
+      .get('/login', () => 'ok')
+
+    const res = await app.handle(new Request('http://localhost/login'))
+
+    expect(res.status).toBe(429)
+    expect(res.headers.get('ratelimit-limit')).toBe('5')
   })
 })
 
-describe('rateLimit plugin (production) - storeTimeoutMs', () => {
-  const slowStore = (delayMs: number): RateLimitStore => ({
+describe('rateLimit plugin (production) - key guardrails', () => {
+  it('hashes base keys before storage when hashKeys is enabled or maxKeyLength is exceeded', async () => {
+    let seenKey = ''
+    const app = new Elysia()
+      .use(
+        rateLimit({
+          global: { id: 'g', limit: 1, window: 60_000 },
+          hashKeys: true,
+          maxKeyLength: 4,
+          store: {
+            hit: (input) => {
+              seenKey = input.key
+
+              return {
+                key: input.key,
+                count: 1,
+                remaining: 0,
+                limit: input.limit,
+                resetAt: input.now + input.window,
+                blocked: false,
+                retryAfter: 0,
+              }
+            },
+          },
+          cleanupInterval: 0,
+          keyGenerator: () => 'very-long-user-controlled-key',
+        }),
+      )
+      .get('/x', () => 'ok')
+
+    const res = await app.handle(new Request('http://localhost/x'))
+
+    expect(res.status).toBe(200)
+    expect(seenKey).toMatch(/^rate-limit:g:sha256:[a-f0-9]{64}$/)
+    expect(seenKey).not.toContain('very-long-user-controlled-key')
+  })
+
+  it('hashes only overlong keys when maxKeyLength is exceeded', async () => {
+    let seenKey = ''
+    const app = new Elysia()
+      .use(
+        rateLimit({
+          global: { id: 'g', limit: 1, window: 60_000 },
+          maxKeyLength: 4,
+          store: {
+            hit: (input) => {
+              seenKey = input.key
+
+              return {
+                key: input.key,
+                count: 1,
+                remaining: 0,
+                limit: input.limit,
+                resetAt: input.now + input.window,
+                blocked: false,
+                retryAfter: 0,
+              }
+            },
+          },
+          cleanupInterval: 0,
+          keyGenerator: () => 'long-key',
+        }),
+      )
+      .get('/x', () => 'ok')
+
+    await app.handle(new Request('http://localhost/x'))
+
+    expect(seenKey).toMatch(/^rate-limit:g:sha256:[a-f0-9]{64}$/)
+  })
+
+  it('validates maxKeyLength at construction', () => {
+    expect(() => rateLimit({ maxKeyLength: 0 })).toThrow(/maxKeyLength/)
+    expect(() => rateLimit({ maxKeyLength: 1.5 })).toThrow(/maxKeyLength/)
+  })
+})
+
+describe('rateLimit plugin (production) - storeTimeout', () => {
+  const slowStore = (delay: number): RateLimitStore => ({
     hit: async (input) => {
-      await new Promise((r) => setTimeout(r, delayMs))
+      await new Promise((r) => setTimeout(r, delay))
+
       return {
         key: input.key,
         count: 1,
         remaining: input.limit - 1,
         limit: input.limit,
-        resetAt: input.now + input.windowMs,
+        resetAt: input.now + input.window,
         blocked: false,
-        retryAfterMs: 0
+        retryAfter: 0,
       }
-    }
+    },
   })
 
   it('drops the slow rule under the configured timeout (default fail-open)', async () => {
     const app = new Elysia()
       .use(
         rateLimit({
-          global: { id: 'g', limit: 5, windowMs: 60_000 },
+          global: { id: 'g', limit: 5, window: 60_000 },
           store: slowStore(50),
-          storeTimeoutMs: 5,
-          cleanupIntervalMs: 0,
-          keyGenerator: () => 'k'
-        })
+          storeTimeout: 5,
+          cleanupInterval: 0,
+          keyGenerator: () => 'k',
+        }),
       )
       .get('/x', () => 'ok')
 
     const res = await app.handle(new Request('http://localhost/x'))
+
     expect(res.status).toBe(200)
     expect(res.headers.get('ratelimit-limit')).toBeNull()
   })
@@ -184,17 +288,18 @@ describe('rateLimit plugin (production) - storeTimeoutMs', () => {
     const app = new Elysia()
       .use(
         rateLimit({
-          global: { id: 'g', limit: 5, windowMs: 60_000 },
+          global: { id: 'g', limit: 5, window: 60_000 },
           store: slowStore(50),
-          storeTimeoutMs: 5,
+          storeTimeout: 5,
           onStoreError: 'block',
-          cleanupIntervalMs: 0,
-          keyGenerator: () => 'k'
-        })
+          cleanupInterval: 0,
+          keyGenerator: () => 'k',
+        }),
       )
       .get('/x', () => 'ok')
 
     const res = await app.handle(new Request('http://localhost/x'))
+
     expect(res.status).toBe(429)
   })
 })
@@ -205,14 +310,14 @@ describe('rateLimit plugin (production) - onDecision observability', () => {
     const app = new Elysia()
       .use(
         rateLimit({
-          global: { id: 'g', limit: 5, windowMs: 60_000 },
+          global: { id: 'g', limit: 5, window: 60_000 },
           store: passingStore(),
           onDecision: (info) => {
             events.push(info)
           },
-          cleanupIntervalMs: 0,
-          keyGenerator: () => 'k'
-        })
+          cleanupInterval: 0,
+          keyGenerator: () => 'k',
+        }),
       )
       .get('/x', () => 'ok')
 
@@ -223,7 +328,7 @@ describe('rateLimit plugin (production) - onDecision observability', () => {
     expect(events[0]!.decisions.length).toBe(1)
     expect(events[0]!.decisions[0]!.ruleId).toBe('g')
     expect(events[0]!.evaluatedAt).toBeGreaterThan(0)
-    expect(events[0]!.storeLatencyMs).toBeGreaterThanOrEqual(0)
+    expect(events[0]!.storeLatency).toBeGreaterThanOrEqual(0)
   })
 
   it('fires once per blocked request and exposes blockedBy', async () => {
@@ -231,18 +336,19 @@ describe('rateLimit plugin (production) - onDecision observability', () => {
     const app = new Elysia()
       .use(
         rateLimit({
-          global: { id: 'g', limit: 1, windowMs: 60_000 },
+          global: { id: 'g', limit: 1, window: 60_000 },
           store: blockingStore(),
           onDecision: (info) => {
             events.push(info)
           },
-          cleanupIntervalMs: 0,
-          keyGenerator: () => 'k'
-        })
+          cleanupInterval: 0,
+          keyGenerator: () => 'k',
+        }),
       )
       .get('/x', () => 'ok')
 
     const res = await app.handle(new Request('http://localhost/x'))
+
     expect(res.status).toBe(429)
 
     expect(events.length).toBe(1)
@@ -255,18 +361,19 @@ describe('rateLimit plugin (production) - onDecision observability', () => {
     const app = new Elysia()
       .use(
         rateLimit({
-          global: { id: 'g', limit: 5, windowMs: 60_000 },
+          global: { id: 'g', limit: 5, window: 60_000 },
           store: passingStore(),
           onDecision: () => {
             throw new Error('observability is on fire')
           },
-          cleanupIntervalMs: 0,
-          keyGenerator: () => 'k'
-        })
+          cleanupInterval: 0,
+          keyGenerator: () => 'k',
+        }),
       )
       .get('/x', () => 'ok')
 
     const res = await app.handle(new Request('http://localhost/x'))
+
     expect(res.status).toBe(200)
     expect(await res.text()).toBe('ok')
   })
@@ -276,15 +383,13 @@ describe('rateLimit plugin (production) - onDecision observability', () => {
     const app = new Elysia()
       .use(
         rateLimit({
-          routes: [
-            { id: 'rt', path: '/login', method: 'POST', limit: 5, windowMs: 60_000 }
-          ],
+          routes: [{ id: 'rt', path: '/login', method: 'POST', limit: 5, window: 60_000 }],
           store: passingStore(),
           onDecision: () => {
             calls++
           },
-          cleanupIntervalMs: 0
-        })
+          cleanupInterval: 0,
+        }),
       )
       .get('/anything', () => 'ok')
 
@@ -300,20 +405,21 @@ describe('rateLimit plugin (production) - onDecision observability', () => {
           global: {
             id: 'g',
             limit: 5,
-            windowMs: 60_000,
-            skip: () => true
+            window: 60_000,
+            skip: () => true,
           },
           store: passingStore(),
           onDecision: (info) => {
             events.push(info)
           },
-          cleanupIntervalMs: 0,
-          keyGenerator: () => 'k'
-        })
+          cleanupInterval: 0,
+          keyGenerator: () => 'k',
+        }),
       )
       .get('/x', () => 'ok')
 
     const res = await app.handle(new Request('http://localhost/x'))
+
     expect(res.status).toBe(200)
     expect(events.length).toBe(1)
     expect(events[0]!.decisions).toEqual([])
@@ -322,78 +428,119 @@ describe('rateLimit plugin (production) - onDecision observability', () => {
 
 describe('rateLimit plugin (production) - pluginName', () => {
   it('allows two rate-limit plugins on the same Elysia instance with distinct names', async () => {
-    // With the default name, Elysia would dedupe and the second plugin would
-    // be silently dropped. With distinct pluginName values, both apply.
     const app = new Elysia()
       .use(
         rateLimit({
           pluginName: 'rl-strict',
           namespace: 'strict',
-          routes: [{ id: 's', path: '/x', limit: 1, windowMs: 60_000 }],
+          routes: [{ id: 's', path: '/x', limit: 1, window: 60_000 }],
           store: { type: 'memory' },
-          cleanupIntervalMs: 0,
-          keyGenerator: () => 'k'
-        })
+          cleanupInterval: 0,
+          keyGenerator: () => 'k',
+        }),
       )
       .use(
         rateLimit({
           pluginName: 'rl-lenient',
           namespace: 'lenient',
-          global: { id: 'g', limit: 1000, windowMs: 60_000 },
+          global: { id: 'g', limit: 1000, window: 60_000 },
           store: { type: 'memory' },
-          cleanupIntervalMs: 0,
-          keyGenerator: () => 'k'
-        })
+          cleanupInterval: 0,
+          keyGenerator: () => 'k',
+        }),
       )
       .get('/x', () => 'ok')
 
     const a = await app.handle(new Request('http://localhost/x'))
     const b = await app.handle(new Request('http://localhost/x'))
+
     expect(a.status).toBe(200)
-    // The strict plugin (limit 1) should kick in on the second request, even
-    // though the lenient one (limit 1000) is also installed.
     expect(b.status).toBe(429)
   })
 
-  it('still dedupes when two plugins share the default name (documented behavior)', async () => {
+  it('allows separate rateLimit() calls with the default name to compose', async () => {
     const calls: string[] = []
     const trackingStore = (label: string): RateLimitStore => ({
       hit: (input) => {
         calls.push(label)
+
         return {
           key: input.key,
           count: 1,
           remaining: input.limit - 1,
           limit: input.limit,
-          resetAt: input.now + input.windowMs,
+          resetAt: input.now + input.window,
           blocked: false,
-          retryAfterMs: 0
+          retryAfter: 0,
         }
-      }
+      },
     })
 
     const app = new Elysia()
       .use(
         rateLimit({
-          global: { id: 'g', limit: 10, windowMs: 60_000 },
+          global: { id: 'g', limit: 10, window: 60_000 },
           store: trackingStore('first'),
-          cleanupIntervalMs: 0,
-          keyGenerator: () => 'k'
-        })
+          cleanupInterval: 0,
+          keyGenerator: () => 'k',
+        }),
       )
       .use(
         rateLimit({
-          global: { id: 'g', limit: 10, windowMs: 60_000 },
+          global: { id: 'g', limit: 10, window: 60_000 },
           store: trackingStore('second'),
-          cleanupIntervalMs: 0,
-          keyGenerator: () => 'k'
-        })
+          cleanupInterval: 0,
+          keyGenerator: () => 'k',
+        }),
       )
       .get('/x', () => 'ok')
 
     await app.handle(new Request('http://localhost/x'))
 
-    // Only the first plugin's onRequest ran (Elysia dedupes by name).
+    expect(calls).toEqual(['first', 'second'])
+  })
+
+  it('dedupes only when pluginName and seed are intentionally reused', async () => {
+    const calls: string[] = []
+    const trackingStore = (label: string): RateLimitStore => ({
+      hit: (input) => {
+        calls.push(label)
+
+        return {
+          key: input.key,
+          count: 1,
+          remaining: input.limit - 1,
+          limit: input.limit,
+          resetAt: input.now + input.window,
+          blocked: false,
+          retryAfter: 0,
+        }
+      },
+    })
+
+    const app = new Elysia()
+      .use(
+        rateLimit({
+          seed: 'shared',
+          global: { id: 'g', limit: 10, window: 60_000 },
+          store: trackingStore('first'),
+          cleanupInterval: 0,
+          keyGenerator: () => 'k',
+        }),
+      )
+      .use(
+        rateLimit({
+          seed: 'shared',
+          global: { id: 'g', limit: 10, window: 60_000 },
+          store: trackingStore('second'),
+          cleanupInterval: 0,
+          keyGenerator: () => 'k',
+        }),
+      )
+      .get('/x', () => 'ok')
+
+    await app.handle(new Request('http://localhost/x'))
+
     expect(calls).toEqual(['first'])
   })
 })
@@ -404,12 +551,12 @@ describe('rateLimit plugin (production) - fallbackStore', () => {
       .use(
         rateLimit({
           namespace: 'fb',
-          global: { id: 'g', limit: 2, windowMs: 60_000 },
+          global: { id: 'g', limit: 2, window: 60_000 },
           store: throwingStore(),
           fallbackStore: true,
-          cleanupIntervalMs: 0,
-          keyGenerator: () => 'k'
-        })
+          cleanupInterval: 0,
+          keyGenerator: () => 'k',
+        }),
       )
       .get('/x', () => 'ok')
 
@@ -427,16 +574,17 @@ describe('rateLimit plugin (production) - fallbackStore', () => {
     const app = new Elysia()
       .use(
         rateLimit({
-          global: { id: 'g', limit: 100, windowMs: 60_000 },
+          global: { id: 'g', limit: 100, window: 60_000 },
           store: throwingStore(),
           fallbackStore: { type: 'memory', maxEntries: 50 },
-          cleanupIntervalMs: 0,
-          keyGenerator: () => 'k'
-        })
+          cleanupInterval: 0,
+          keyGenerator: () => 'k',
+        }),
       )
       .get('/x', () => 'ok')
 
     const res = await app.handle(new Request('http://localhost/x'))
+
     expect(res.status).toBe(200)
     expect(res.headers.get('ratelimit-limit')).toBe('100')
   })
@@ -446,20 +594,22 @@ describe('rateLimit plugin (production) - fallbackStore', () => {
     const app = new Elysia()
       .use(
         rateLimit({
-          global: { id: 'g', limit: 5, windowMs: 60_000 },
+          global: { id: 'g', limit: 5, window: 60_000 },
           store: throwingStore('primary'),
           fallbackStore: throwingStore('secondary'),
           onStoreError: (info) => {
             ctx = info
+
             return 'allow'
           },
-          cleanupIntervalMs: 0,
-          keyGenerator: () => 'k'
-        })
+          cleanupInterval: 0,
+          keyGenerator: () => 'k',
+        }),
       )
       .get('/x', () => 'ok')
 
     const res = await app.handle(new Request('http://localhost/x'))
+
     expect(res.status).toBe(200)
     expect(ctx?.attempt).toBe('fallback')
     expect((ctx?.primaryError as Error).message).toBe('primary')
@@ -468,24 +618,24 @@ describe('rateLimit plugin (production) - fallbackStore', () => {
 })
 
 describe('rateLimit plugin (production) - decision header semantics under failure', () => {
-  it("blocked synthesized decisions still drive ratelimit-* headers", async () => {
+  it('blocked synthesized decisions still drive ratelimit-* headers', async () => {
     const app = new Elysia()
       .use(
         rateLimit({
-          global: { id: 'g', limit: 10, windowMs: 60_000 },
+          global: { id: 'g', limit: 10, window: 60_000 },
           store: throwingStore(),
           onStoreError: 'block',
-          cleanupIntervalMs: 0,
-          keyGenerator: () => 'k'
-        })
+          cleanupInterval: 0,
+          keyGenerator: () => 'k',
+        }),
       )
       .get('/x', () => 'ok')
 
     const res = await app.handle(new Request('http://localhost/x'))
+
     expect(res.status).toBe(429)
     expect(res.headers.get('ratelimit-limit')).toBe('10')
     expect(res.headers.get('ratelimit-remaining')).toBe('0')
-    // retryAfterMs in the synthesized decision is the rule's full windowMs (60s).
     expect(Number(res.headers.get('retry-after'))).toBe(60)
   })
 
@@ -493,32 +643,32 @@ describe('rateLimit plugin (production) - decision header semantics under failur
     const app = new Elysia()
       .use(
         rateLimit({
-          global: { id: 'g', limit: 100, windowMs: 60_000, store: passingStore() },
+          global: { id: 'g', limit: 100, window: 60_000, store: passingStore() },
           routes: [
             {
               id: 'broken',
               path: '/x',
               method: 'GET',
               limit: 7,
-              windowMs: 60_000,
-              store: throwingStore()
-            }
+              window: 60_000,
+              store: throwingStore(),
+            },
           ],
           onStoreError: 'block',
-          cleanupIntervalMs: 0,
-          keyGenerator: () => 'k'
-        })
+          cleanupInterval: 0,
+          keyGenerator: () => 'k',
+        }),
       )
       .get('/x', () => 'ok')
 
     const res = await app.handle(new Request('http://localhost/x'))
+
     expect(res.status).toBe(429)
-    // Synthesized block on 'broken' (limit=7, remaining=0) is stricter than
-    // the healthy 'global' decision (remaining=99), so headers reflect 'broken'.
     expect(res.headers.get('ratelimit-limit')).toBe('7')
     expect(res.headers.get('ratelimit-remaining')).toBe('0')
   })
 })
 
 const _typeAssertion = {} as RateLimitDecision
+
 void _typeAssertion
