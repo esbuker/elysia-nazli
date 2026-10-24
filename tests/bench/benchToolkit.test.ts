@@ -178,3 +178,17 @@ describe('benchmarkHttpRequests', () => {
     expect(r.elapsed).toBeGreaterThan(0)
   })
 })
+
+describe('benchmark result integrity', () => {
+  it('rejects a non-200 success status instead of timing a redirect', async () => {
+    await expect(
+      benchmarkHttpRequests(
+        { handle: () => new Response(null, { status: 302 }) },
+        {
+          iterations: 1,
+          warmup: 0,
+        },
+      ),
+    ).rejects.toThrow('status 302')
+  })
+})

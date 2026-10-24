@@ -1,6 +1,10 @@
 {
   "name": "elysia-nazli",
+<<<<<<< HEAD
   "version": "1.0.0",
+=======
+  "version": "2.0.0",
+>>>>>>> 551f93f (feat!: migrate to Elysia 2 RC and Bun 1.4.4)
   "description": "Production-friendly, store-pluggable rate limiting plugin for Elysia on Bun.",
   "license": "MIT",
   "author": "Enes Büker (https://github.com/esbuker)",
@@ -14,7 +18,7 @@
   },
   "type": "module",
   "engines": {
-    "bun": ">=1.3.13"
+    "bun": ">=1.4.4"
   },
   "main": "./dist/index.js",
   "module": "./dist/index.js",
@@ -55,20 +59,20 @@
     "redis"
   ],
   "peerDependencies": {
-    "elysia": "^1.4.0"
+    "elysia": "^2.0.0-rc.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@stylistic/eslint-plugin": "^5.10.0",
-    "@types/bun": "^1.2.0",
-    "elysia-rate-limit": "^4.6.2",
+    "@types/bun": "^1.4.4",
+    "elysia": "2.0.0-rc.0",
+    "elysia-rate-limit": "5.1.1",
     "eslint": "^10.4.0",
-    "prettier": "^3.8.3",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.59.3"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "bun check --no-script -p tsconfig.json",
     "test": "bun test tests",
     "test:integration": "bun test tests/integration",
     "bench": "bun run bench/benchmark.ts",
@@ -81,11 +85,12 @@
     "size": "bun run ./scripts/sizeReport.ts",
     "build": "bun run clean && bun run build:js && bun run build:types && bun run size",
     "release:check": "bun run typecheck && bun run test && bun run build",
-    "format": "prettier --write .",
-    "format:check": "prettier --check .",
+    "format": "bun fmt",
+    "format:check": "bun fmt --check",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "check": "bun run format:check && bun run lint",
-    "fix": "bun run format && bun run lint:fix"
+    "fix": "bun run format && bun run lint:fix",
+    "typecheck:tsc": "tsc --noEmit -p tsconfig.json"
   }
 }

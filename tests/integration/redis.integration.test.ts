@@ -2,7 +2,6 @@ import { describe, expect, it } from 'bun:test'
 import { RedisClient } from 'bun'
 
 import { createRedisStore } from '../../src/plugins/redisStore'
-import type { RedisClientLike } from '../../src/types'
 
 type Backend = {
   name: string
@@ -85,7 +84,7 @@ const withStore = async (
 
   try {
     const store = createRedisStore({
-      client: client as RedisClientLike,
+      client,
       prefix: uniquePrefix(backend, prefixName),
       ...options,
     })

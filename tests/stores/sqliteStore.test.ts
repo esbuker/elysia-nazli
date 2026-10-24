@@ -157,10 +157,9 @@ describe('SqliteRateLimitStore - configuration', () => {
       expect(tables).not.toContain('elysia_rate_limit')
 
       const rows = inspector
-        .query<
-          { count: number; key: string },
-          []
-        >("SELECT key, count FROM custom_rate_table_1 WHERE key = 'k'")
+        .query<{ count: number; key: string }, []>(
+          "SELECT key, count FROM custom_rate_table_1 WHERE key = 'k'",
+        )
         .all()
 
       expect(rows.length).toBe(1)

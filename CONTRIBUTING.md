@@ -26,6 +26,8 @@ Include:
 
 ## Local development
 
+Use the latest stable Bun release (minimum `1.4.4`) and the locked Elysia 2 RC dependencies. Run `bun upgrade` to update a direct Bun installation.
+
 ```bash
 bun install
 bun run typecheck
@@ -41,9 +43,9 @@ Useful scripts:
 | -------------------------- | ----------------------------------------------- |
 | `bun run test`             | Run the full test suite                         |
 | `bun run test:integration` | Run integration tests                           |
-| `bun run typecheck`        | Run TypeScript checks                           |
+| `bun run typecheck`        | Run Bun type checks                             |
 | `bun run lint`             | Run ESLint                                      |
-| `bun run format`           | Format files with Prettier                      |
+| `bun run format`           | Format files with `bun fmt`                     |
 | `bun run build`            | Build JavaScript, declarations, and size report |
 | `bun run bench`            | Run local benchmarks                            |
 | `bun run release:check`    | Run typecheck, tests, and build                 |

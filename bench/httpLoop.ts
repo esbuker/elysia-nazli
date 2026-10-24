@@ -61,7 +61,7 @@ const runLoop = async ({
 
     statusChecksum += response.status
 
-    if (response.status >= 400) {
+    if (response.status !== 200) {
       throw new Error(`HTTP benchmark request failed with status ${response.status}`)
     }
   }

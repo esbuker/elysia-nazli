@@ -483,7 +483,11 @@ export const rateLimit = (options: RateLimitPluginOptions = {}) => {
         // the user returned a fully formed Response.
         for (const [name, value] of Object.entries(context.set.headers)) {
           if (!response.headers.has(name)) {
-            response.headers.set(name, String(value))
+            if (Array.isArray(value)) {
+              for (const item of value) response.headers.append(name, item)
+            } else {
+              response.headers.set(name, String(value))
+            }
           }
         }
 
@@ -494,51 +498,54 @@ export const rateLimit = (options: RateLimitPluginOptions = {}) => {
     return defaultLimitedResponse(retryAfterSeconds)
   }
 
+  // A shared macro owner lets Elysia 2 recognize repeated installations as the
+  // same extension. Each limiter keeps its own hooks and stores; the last
+  // installed limiter supplies defaults for route macros, as in Elysia 1.
+  const routeMacro = new Elysia({ name: 'elysia-nazli/route-macro' }).macro({
+    rateLimit: (routeRule: RateLimitRouteMacroConfig) => {
+      if (!routeRule) {
+        return
+      }
+
+      const { compiled, explicitId, store } = compileRouteMacroRule(routeRule)
+
+      return {
+        seed: explicitId ?? routeRule,
+        beforeHandle: async (ctx) => {
+          const context = ctx as Context
+          const method = upper(context.request.method)
+          const path =
+            typeof context.path === 'string' ? context.path : new URL(context.request.url).pathname
+          const routePath = typeof context.route === 'string' ? context.route : path
+          const rule: CompiledRule = {
+            ...compiled,
+            id: explicitId ?? `route:${method} ${routePath}`,
+            type: 'route',
+            path: routePath,
+            method: method as CompiledRule['method'],
+            methodSet: new Set([method]),
+          }
+          const stores = new Map([[rule.id, store]])
+
+          const response = await evaluateRequest({
+            context,
+            method,
+            path,
+            activeRules: [rule],
+            stores,
+          })
+
+          if (response) {
+            return response
+          }
+        },
+      }
+    },
+  })
+
   const plugin = new Elysia({ name: pluginName, seed: pluginSeed })
-    .macro({
-      rateLimit: (routeRule: RateLimitRouteMacroConfig) => {
-        if (!routeRule) {
-          return
-        }
-
-        const { compiled, explicitId, store } = compileRouteMacroRule(routeRule)
-
-        return {
-          seed: explicitId ?? routeRule,
-          beforeHandle: async (ctx) => {
-            const context = ctx as Context
-            const method = upper(context.request.method)
-            const path =
-              typeof context.path === 'string'
-                ? context.path
-                : new URL(context.request.url).pathname
-            const routePath = typeof context.route === 'string' ? context.route : path
-            const rule: CompiledRule = {
-              ...compiled,
-              id: explicitId ?? `route:${method} ${routePath}`,
-              type: 'route',
-              path: routePath,
-              method: method as CompiledRule['method'],
-              methodSet: new Set([method]),
-            }
-            const stores = new Map([[rule.id, store]])
-
-            const response = await evaluateRequest({
-              context,
-              method,
-              path,
-              activeRules: [rule],
-              stores,
-            })
-
-            if (response) {
-              return response
-            }
-          },
-        }
-      },
-    })
-    .onAfterHandle({ as: 'scoped' }, ({ request, set }) => {
+    .use(routeMacro)
+    .onAfterHandle('plugin', ({ request, set }) => {
       const pending = deferredHeaders.get(request)
 
       if (!pending) {
@@ -557,21 +564,16 @@ export const rateLimit = (options: RateLimitPluginOptions = {}) => {
       })
     })
 
-  /* eslint-disable prefer-const -- Keep Bun from folding this hook into a direct helper return; Elysia flags that shape as slower. */
   if (fastGlobalMemoryRequest) {
     if (fastGlobalMemoryRequest.needsServer) {
       plugin.onRequest((ctx) => {
-        let response: ReturnType<typeof fastGlobalMemoryRequest.handle>
-
-        response = fastGlobalMemoryRequest.handle(ctx.request, ctx.set, ctx.server)
+        const response = fastGlobalMemoryRequest.handle(ctx.request, ctx.set, ctx.server)
 
         return response
       })
     } else {
       plugin.onRequest((ctx) => {
-        let response: ReturnType<typeof fastGlobalMemoryRequest.handle>
-
-        response = fastGlobalMemoryRequest.handle(ctx.request, ctx.set)
+        const response = fastGlobalMemoryRequest.handle(ctx.request, ctx.set)
 
         return response
       })
@@ -600,7 +602,6 @@ export const rateLimit = (options: RateLimitPluginOptions = {}) => {
       }
     })
   }
-  /* eslint-enable prefer-const */
 
   return plugin.onStop(() => {
     storeRegistry.close()

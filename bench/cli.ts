@@ -9,7 +9,7 @@ Options:
   -m, --module <path>         Load custom benchStores (see below)
   -k, --keep                  Keep on-disk SQLite bench files (default: delete DB + WAL/SHM after run)
       --no-builtin-stores     Run only stores from your module (requires -m or path)
-      --compare-plugins       Also compare Elysia app.handle() throughput against elysia-rate-limit
+      --compare-plugins       Also compare Elysia app.handle() throughput against other rate limiters
       --only-plugin-compare   Run only the Elysia app.handle() plugin comparison
 
 Your module (relative to the project directory) should export:
@@ -32,7 +32,10 @@ Environment (optional):
   BENCH_COMPARE_PLUGINS=1 Run the plugin comparison (same as --compare-plugins)
   BENCH_HTTP_ITERATIONS   HTTP app.handle() loop size (default 100_000)
   BENCH_HTTP_UNIQUE_KEYS  Cardinality for HTTP many-keys scenario
-  BENCH_HTTP_WARMUP       Warmup requests per HTTP scenario/entry
+  BENCH_HTTP_WARMUP       Warmup requests per HTTP scenario/entry (default 10_000)
+  BENCH_STORE_WARMUP      Warmup store hits per scenario/entry (default 10_000)
+  BENCH_ROUNDS            Repeated trials with rotated entry order (default 5)
+  BENCH_OUTPUT            Write device, versions, settings and raw samples as JSON
 `
 
 export type ParsedBenchCli = {

@@ -1,0 +1,614 @@
+{
+  "metadata": {
+    "measuredAt": "2026-10-24T15:30:37.384Z",
+    "bun": "1.4.4",
+    "bunRevision": "38afee6c84fcf48c0edb2466aa4b27d287a59c30",
+    "packages": {
+      "elysia-nazli": "2.0.0",
+      "elysia": "2.0.0-rc.0",
+      "elysia-rate-limit": "5.1.1"
+    },
+    "pluginCompatibility": [
+      {
+        "name": "plain-elysia",
+        "status": "supported"
+      },
+      {
+        "name": "plain-elysia+hook",
+        "status": "supported"
+      },
+      {
+        "name": "plain-elysia+headers",
+        "status": "supported"
+      },
+      {
+        "name": "elysia-nazli",
+        "status": "supported"
+      },
+      {
+        "name": "elysia-rate-limit",
+        "status": "unsupported",
+        "reason": "Unmodified elysia-rate-limit@5.1.1 uses the experimental beforeHandle/error/cleanup lifecycle API, which is absent in Elysia 2 RC."
+      }
+    ],
+    "device": {
+      "cpu": "Apple M1",
+      "logicalCpus": 8,
+      "memoryBytes": 17179869184,
+      "platform": "darwin",
+      "arch": "arm64",
+      "kernel": "27.0.0",
+      "macOS": "27.0.1",
+      "model": "MacBookPro17,1"
+    },
+    "git": {
+      "commit": "350d4994abc5f3b6df15897ce045485552a43133",
+      "dirty": true
+    },
+    "config": {
+      "rounds": 5,
+      "storeIterations": 1000000,
+      "storeUniqueKeys": 200000,
+      "storeWarmup": 10000,
+      "sqlitePath": "./tmp/bench/nazli-bench.sqlite",
+      "httpIterations": 100000,
+      "httpUniqueKeys": 20000,
+      "httpWarmup": 10000,
+      "runStoreBenchmarks": true,
+      "comparePlugins": true,
+      "noBuiltinStores": false
+    }
+  },
+  "storeSummary": [
+    {
+      "name": "memory-js",
+      "scenario": "hot-key",
+      "median": 6672518.064658399,
+      "min": 6650253.442156191,
+      "max": 6849328.767150544
+    },
+    {
+      "name": "sqlite",
+      "scenario": "hot-key",
+      "median": 75924.85633451228,
+      "min": 73165.45977725092,
+      "max": 77684.16311236743
+    },
+    {
+      "name": "memory-js",
+      "scenario": "many-keys",
+      "median": 2553474.2708817925,
+      "min": 2311498.055885645,
+      "max": 3179255.9905130565
+    },
+    {
+      "name": "sqlite",
+      "scenario": "many-keys",
+      "median": 48641.385701772975,
+      "min": 48392.50278341503,
+      "max": 49204.22640114017
+    }
+  ],
+  "httpSummary": [
+    {
+      "name": "plain-elysia",
+      "scenario": "hot-key",
+      "median": 1396509.0764359925,
+      "min": 1372887.767550947,
+      "max": 1423358.3785101918
+    },
+    {
+      "name": "plain-elysia+hook",
+      "scenario": "hot-key",
+      "median": 1119028.7618140655,
+      "min": 1091161.0499150043,
+      "max": 1135195.1077996122
+    },
+    {
+      "name": "plain-elysia+headers",
+      "scenario": "hot-key",
+      "median": 779517.9051249018,
+      "min": 773844.0704197756,
+      "max": 799082.9149127896
+    },
+    {
+      "name": "elysia-nazli",
+      "scenario": "hot-key",
+      "median": 537692.9477537245,
+      "min": 492027.91766408377,
+      "max": 555391.1258417708
+    },
+    {
+      "name": "plain-elysia",
+      "scenario": "many-keys",
+      "median": 1293555.0829971232,
+      "min": 1126304.21663857,
+      "max": 1299601.4668133315
+    },
+    {
+      "name": "plain-elysia+hook",
+      "scenario": "many-keys",
+      "median": 962892.9185657069,
+      "min": 644463.1247093392,
+      "max": 1041287.0307699939
+    },
+    {
+      "name": "plain-elysia+headers",
+      "scenario": "many-keys",
+      "median": 711196.2422495777,
+      "min": 618586.1929248493,
+      "max": 745885.972681894
+    },
+    {
+      "name": "elysia-nazli",
+      "scenario": "many-keys",
+      "median": 430353.0131973101,
+      "min": 372356.09716820053,
+      "max": 481245.75198360527
+    }
+  ],
+  "storeResults": [
+    {
+      "name": "memory-js",
+      "scenario": "hot-key",
+      "round": 1,
+      "elapsed": 149.012042,
+      "opsPerSec": 6710867.031806731
+    },
+    {
+      "name": "sqlite",
+      "scenario": "hot-key",
+      "round": 1,
+      "elapsed": 13651.480667,
+      "opsPerSec": 73252.12732544978
+    },
+    {
+      "name": "sqlite",
+      "scenario": "hot-key",
+      "round": 2,
+      "elapsed": 13667.651417000001,
+      "opsPerSec": 73165.45977725092
+    },
+    {
+      "name": "memory-js",
+      "scenario": "hot-key",
+      "round": 2,
+      "elapsed": 149.99166600000171,
+      "opsPerSec": 6667037.0872471575
+    },
+    {
+      "name": "memory-js",
+      "scenario": "hot-key",
+      "round": 3,
+      "elapsed": 150.3702090000006,
+      "opsPerSec": 6650253.442156191
+    },
+    {
+      "name": "sqlite",
+      "scenario": "hot-key",
+      "round": 3,
+      "elapsed": 12872.636583,
+      "opsPerSec": 77684.16311236743
+    },
+    {
+      "name": "sqlite",
+      "scenario": "hot-key",
+      "round": 4,
+      "elapsed": 12946.418999999994,
+      "opsPerSec": 77241.43641573786
+    },
+    {
+      "name": "memory-js",
+      "scenario": "hot-key",
+      "round": 4,
+      "elapsed": 149.86845899999753,
+      "opsPerSec": 6672518.064658399
+    },
+    {
+      "name": "memory-js",
+      "scenario": "hot-key",
+      "round": 5,
+      "elapsed": 145.999708000003,
+      "opsPerSec": 6849328.767150544
+    },
+    {
+      "name": "sqlite",
+      "scenario": "hot-key",
+      "round": 5,
+      "elapsed": 13170.917250000006,
+      "opsPerSec": 75924.85633451228
+    },
+    {
+      "name": "memory-js",
+      "scenario": "many-keys",
+      "round": 1,
+      "elapsed": 391.6232919999893,
+      "opsPerSec": 2553474.2708817925
+    },
+    {
+      "name": "sqlite",
+      "scenario": "many-keys",
+      "round": 1,
+      "elapsed": 20435.308875000002,
+      "opsPerSec": 48934.90996964439
+    },
+    {
+      "name": "sqlite",
+      "scenario": "many-keys",
+      "round": 2,
+      "elapsed": 20664.357958000008,
+      "opsPerSec": 48392.50278341503
+    },
+    {
+      "name": "memory-js",
+      "scenario": "many-keys",
+      "round": 2,
+      "elapsed": 314.5390000000043,
+      "opsPerSec": 3179255.9905130565
+    },
+    {
+      "name": "memory-js",
+      "scenario": "many-keys",
+      "round": 3,
+      "elapsed": 338.07120799999393,
+      "opsPerSec": 2957956.7154385354
+    },
+    {
+      "name": "sqlite",
+      "scenario": "many-keys",
+      "round": 3,
+      "elapsed": 20323.457417000012,
+      "opsPerSec": 49204.22640114017
+    },
+    {
+      "name": "sqlite",
+      "scenario": "many-keys",
+      "round": 4,
+      "elapsed": 20558.62483299998,
+      "opsPerSec": 48641.385701772975
+    },
+    {
+      "name": "memory-js",
+      "scenario": "many-keys",
+      "round": 4,
+      "elapsed": 410.5431669999962,
+      "opsPerSec": 2435797.4517208547
+    },
+    {
+      "name": "memory-js",
+      "scenario": "many-keys",
+      "round": 5,
+      "elapsed": 432.61987500000396,
+      "opsPerSec": 2311498.055885645
+    },
+    {
+      "name": "sqlite",
+      "scenario": "many-keys",
+      "round": 5,
+      "elapsed": 20659.898000000016,
+      "opsPerSec": 48402.94952085433
+    }
+  ],
+  "httpResults": [
+    {
+      "name": "plain-elysia",
+      "scenario": "hot-key",
+      "round": 1,
+      "elapsed": 70.2563749999972,
+      "opsPerSec": 1423358.3785101918,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "plain-elysia+hook",
+      "scenario": "hot-key",
+      "round": 1,
+      "elapsed": 89.36320800002431,
+      "opsPerSec": 1119028.7618140655,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "plain-elysia+headers",
+      "scenario": "hot-key",
+      "round": 1,
+      "elapsed": 129.22500000000582,
+      "opsPerSec": 773844.0704197756,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "elysia-nazli",
+      "scenario": "hot-key",
+      "round": 1,
+      "elapsed": 189.86650000000373,
+      "opsPerSec": 526685.855587995,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "plain-elysia+hook",
+      "scenario": "hot-key",
+      "round": 2,
+      "elapsed": 91.64550000001327,
+      "opsPerSec": 1091161.0499150043,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "plain-elysia+headers",
+      "scenario": "hot-key",
+      "round": 2,
+      "elapsed": 128.28441699998803,
+      "opsPerSec": 779517.9051249018,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "elysia-nazli",
+      "scenario": "hot-key",
+      "round": 2,
+      "elapsed": 185.9797499999986,
+      "opsPerSec": 537692.9477537245,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "plain-elysia",
+      "scenario": "hot-key",
+      "round": 2,
+      "elapsed": 72.83916599999066,
+      "opsPerSec": 1372887.767550947,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "plain-elysia+headers",
+      "scenario": "hot-key",
+      "round": 3,
+      "elapsed": 125.14345900001354,
+      "opsPerSec": 799082.9149127896,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "elysia-nazli",
+      "scenario": "hot-key",
+      "round": 3,
+      "elapsed": 181.0721659999981,
+      "opsPerSec": 552265.9954263818,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "plain-elysia",
+      "scenario": "hot-key",
+      "round": 3,
+      "elapsed": 71.78129199999967,
+      "opsPerSec": 1393120.647647307,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "plain-elysia+hook",
+      "scenario": "hot-key",
+      "round": 3,
+      "elapsed": 88.09058399999049,
+      "opsPerSec": 1135195.1077996122,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "elysia-nazli",
+      "scenario": "hot-key",
+      "round": 4,
+      "elapsed": 180.05329099998926,
+      "opsPerSec": 555391.1258417708,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "plain-elysia",
+      "scenario": "hot-key",
+      "round": 4,
+      "elapsed": 71.18966699999874,
+      "opsPerSec": 1404698.240827588,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "plain-elysia+hook",
+      "scenario": "hot-key",
+      "round": 4,
+      "elapsed": 89.7880839999998,
+      "opsPerSec": 1113733.532837166,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "plain-elysia+headers",
+      "scenario": "hot-key",
+      "round": 4,
+      "elapsed": 128.80508299998473,
+      "opsPerSec": 776366.8767637985,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "plain-elysia",
+      "scenario": "hot-key",
+      "round": 5,
+      "elapsed": 71.60712500000955,
+      "opsPerSec": 1396509.0764359925,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "plain-elysia+hook",
+      "scenario": "hot-key",
+      "round": 5,
+      "elapsed": 88.15666700000293,
+      "opsPerSec": 1134344.1557289895,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "plain-elysia+headers",
+      "scenario": "hot-key",
+      "round": 5,
+      "elapsed": 127.6272089999984,
+      "opsPerSec": 783531.9818049242,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "elysia-nazli",
+      "scenario": "hot-key",
+      "round": 5,
+      "elapsed": 203.24049999998533,
+      "opsPerSec": 492027.91766408377,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "plain-elysia",
+      "scenario": "many-keys",
+      "round": 1,
+      "elapsed": 88.78595900000073,
+      "opsPerSec": 1126304.21663857,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "plain-elysia+hook",
+      "scenario": "many-keys",
+      "round": 1,
+      "elapsed": 108.36541699999361,
+      "opsPerSec": 922803.6283937881,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "plain-elysia+headers",
+      "scenario": "many-keys",
+      "round": 1,
+      "elapsed": 161.65895899999305,
+      "opsPerSec": 618586.1929248493,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "elysia-nazli",
+      "scenario": "many-keys",
+      "round": 1,
+      "elapsed": 241.37349999998696,
+      "opsPerSec": 414295.6869747731,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "plain-elysia+hook",
+      "scenario": "many-keys",
+      "round": 2,
+      "elapsed": 103.85370800000965,
+      "opsPerSec": 962892.9185657069,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "plain-elysia+headers",
+      "scenario": "many-keys",
+      "round": 2,
+      "elapsed": 134.06875000000582,
+      "opsPerSec": 745885.972681894,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "elysia-nazli",
+      "scenario": "many-keys",
+      "round": 2,
+      "elapsed": 268.56012499998906,
+      "opsPerSec": 372356.09716820053,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "plain-elysia",
+      "scenario": "many-keys",
+      "round": 2,
+      "elapsed": 86.08679100000882,
+      "opsPerSec": 1161618.3950914114,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "plain-elysia+headers",
+      "scenario": "many-keys",
+      "round": 3,
+      "elapsed": 140.6081669999985,
+      "opsPerSec": 711196.2422495777,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "elysia-nazli",
+      "scenario": "many-keys",
+      "round": 3,
+      "elapsed": 207.79404199999408,
+      "opsPerSec": 481245.75198360527,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "plain-elysia",
+      "scenario": "many-keys",
+      "round": 3,
+      "elapsed": 77.02483400001074,
+      "opsPerSec": 1298282.5772787263,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "plain-elysia+hook",
+      "scenario": "many-keys",
+      "round": 3,
+      "elapsed": 96.88120900001377,
+      "opsPerSec": 1032191.9083398907,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "elysia-nazli",
+      "scenario": "many-keys",
+      "round": 4,
+      "elapsed": 209.92324999999255,
+      "opsPerSec": 476364.5761010443,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "plain-elysia",
+      "scenario": "many-keys",
+      "round": 4,
+      "elapsed": 77.3063329999859,
+      "opsPerSec": 1293555.0829971232,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "plain-elysia+hook",
+      "scenario": "many-keys",
+      "round": 4,
+      "elapsed": 96.03500000000349,
+      "opsPerSec": 1041287.0307699939,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "plain-elysia+headers",
+      "scenario": "many-keys",
+      "round": 4,
+      "elapsed": 136.47812499999418,
+      "opsPerSec": 732718.1553820751,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "plain-elysia",
+      "scenario": "many-keys",
+      "round": 5,
+      "elapsed": 76.94666600000346,
+      "opsPerSec": 1299601.4668133315,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "plain-elysia+hook",
+      "scenario": "many-keys",
+      "round": 5,
+      "elapsed": 155.1679160000058,
+      "opsPerSec": 644463.1247093392,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "plain-elysia+headers",
+      "scenario": "many-keys",
+      "round": 5,
+      "elapsed": 146.5489579999994,
+      "opsPerSec": 682365.8207109218,
+      "statusChecksum": 20000000
+    },
+    {
+      "name": "elysia-nazli",
+      "scenario": "many-keys",
+      "round": 5,
+      "elapsed": 232.36737500000163,
+      "opsPerSec": 430353.0131973101,
+      "statusChecksum": 20000000
+    }
+  ]
+}

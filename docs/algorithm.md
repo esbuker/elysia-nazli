@@ -177,12 +177,16 @@ rateLimit()
 This is intentional so route-level options can be used cleanly:
 
 ```ts
-new Elysia().use(rateLimit()).post('/login', () => 'ok', {
-  rateLimit: {
-    limit: 10,
-    window: '15m',
+new Elysia().use(rateLimit()).post(
+  '/login',
+  {
+    rateLimit: {
+      limit: 10,
+      window: '15m',
+    },
   },
-})
+  () => 'ok',
+)
 ```
 
 ## Custom stores and algorithms

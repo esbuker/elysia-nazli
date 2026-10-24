@@ -164,13 +164,19 @@ rateLimit({
 After installing the plugin, every route can accept a `rateLimit` option:
 
 ```ts
-new Elysia().use(rateLimit()).get('/users/:id', ({ params }) => params.id, {
-  rateLimit: {
-    limit: 60,
-    window: '1m',
+new Elysia().use(rateLimit()).get(
+  '/users/:id',
+  {
+    rateLimit: {
+      limit: 60,
+      window: '1m',
+    },
   },
-})
+  ({ params }) => params.id,
+)
 ```
+
+Elysia 2 places options before the handler: `.get(path, options, handler)`. When multiple limiter instances are installed, the last instance supplies the route macro defaults; their plugin-level rules all remain active.
 
 The route option accepts the same shape as `RuleConfig` except `method` is omitted because the route already defines the method.
 

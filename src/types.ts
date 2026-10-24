@@ -3,15 +3,7 @@ import type { Context } from 'elysia'
 export type MaybePromise<T> = T | Promise<T>
 
 type HttpMethod =
-  | 'GET'
-  | 'POST'
-  | 'PUT'
-  | 'PATCH'
-  | 'DELETE'
-  | 'OPTIONS'
-  | 'HEAD'
-  | 'TRACE'
-  | 'CONNECT'
+  'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'OPTIONS' | 'HEAD' | 'TRACE' | 'CONNECT'
 
 export type RateLimitHttpMethod = HttpMethod | Lowercase<HttpMethod>
 export type RateLimitDuration = number | string
@@ -149,15 +141,15 @@ export interface RedisClientLike {
   pTTL?(key: string): MaybePromise<number | string | bigint>
   psetex?(key: string, milliseconds: number, value: string): MaybePromise<unknown>
   pSetEx?(key: string, milliseconds: number, value: string): MaybePromise<unknown>
-  /**
-   * Optional. When present, the store uses a single-round-trip Lua script for
-   * atomic INCR + EXPIRE + ban-check. Bun's built-in `RedisClient` exposes
-   * `send('EVAL', [...])`; `send` is the recommended adapter.
-   *
-   * Either `send` OR `eval` is sufficient — `eval` is preferred when both are
-   * provided because it's a more direct API.
-   */
-  eval?(script: string, keys: string[], args: (string | number)[]): MaybePromise<unknown>
+  /** Native Bun/ioredis, node-redis, or custom array-based Lua EVAL. */
+  eval?:
+    | ((script: string, keys: string[], args: (string | number)[]) => MaybePromise<unknown>)
+    | ((
+        script: string,
+        numKeys: number,
+        ...keysAndArgs: (string | number)[]
+      ) => MaybePromise<unknown>)
+    | ((script: string, options: { keys: string[]; arguments: string[] }) => MaybePromise<unknown>)
   send?(command: string, args: string[]): MaybePromise<unknown>
   sendCommand?(args: string[]): MaybePromise<unknown>
 }

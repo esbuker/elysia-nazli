@@ -16,14 +16,13 @@ Built for real services where a single global limit just doesn’t cut it.
 ## Contents
 
 - [Why use it](#why-use-it)
-- [Features](#features)
 - [Quick start](#quick-start)
-- [Installation](#installation)
+- [Features](#features)
 - [Usage examples](#usage-examples)
 - [Compatibility](#compatibility)
+- [Performance](#performance)
 - [Documentation](#documentation)
 - [Development](#development)
-- [Contributing](#contributing)
 
 ## Why use it
 
@@ -35,217 +34,116 @@ Use `elysia-nazli` when your Elysia app needs rate limits that are clear to conf
 - Keep state in memory, SQLite, Redis, or your own store.
 - Decide how your API behaves when the backing store is slow or unavailable.
 
-## Features
-
-- **Global, prefix, and route rules** with string or `RegExp` paths
-- **Elysia route option** support with `{ rateLimit: { ... } }`
-- **Human duration strings** such as `'30s'`, `'15m'`, `'2h'`, and numeric milliseconds
-- **Method-aware limits** for route and prefix rules
-- **Algorithms:** fixed-window, sliding-window, token-bucket, and GCRA
-- **Key resolvers:** `ip`, `user`, `header`, `bodyField`, `firstOf`, `compose`, `hmac`, and `custom`
-- **Ban windows** for stricter abuse handling
-- **Standard and legacy headers** with per-rule overrides
-- **Stores:** memory, SQLite, Redis, and custom `RateLimitStore` implementations
-- **Production controls:** per-route stores, fallback stores, store timeouts, and failure policies
-
 ## Quick start
 
-Install the package:
+Install with Elysia 2 RC:
 
 ```bash
-bun add elysia-nazli
+bun add elysia@rc elysia-nazli
 ```
-
-Add one global limiter:
 
 ```ts
 import { Elysia } from 'elysia'
 import { rateLimit } from 'elysia-nazli'
 
 const app = new Elysia()
-  .use(
-    rateLimit({
-      limit: 120,
-      window: '1m',
-    }),
-  )
+  .use(rateLimit({ limit: 120, window: '1m' }))
   .get('/', () => 'ok')
   .listen(3000)
 ```
 
-This allows 120 requests per minute per client key. The default algorithm is `fixed-window`, the default store is in-memory, and standard `ratelimit-*` headers are enabled.
+Each client key gets 120 requests per minute. Defaults are an in-memory fixed window and standard `ratelimit-*` headers.
 
-## Installation
+## Features
 
-```bash
-bun add elysia-nazli
-```
-
-Peer dependency:
-
-```bash
-bun add elysia
-```
-
-Redis and SQLite helpers are available through subpath exports:
-
-```ts
-import { redisStore } from 'elysia-nazli/redis'
-import { sqliteStore } from 'elysia-nazli/sqlite'
-```
+- **Global, prefix, and route rules** with string or `RegExp` paths
+- **Elysia route options** to keep limits beside your handlers
+- **Human duration strings** such as `'30s'`, `'15m'`, and `'2h'`
+- **Method-aware limits and ban windows** for tighter control
+- **Four algorithms:** fixed-window, sliding-window, token-bucket, and GCRA
+- **Composable keys:** `ip`, `user`, `header`, `bodyField`, `firstOf`, `compose`, `hmac`, and `custom`
+- **Standard and legacy headers** with per-rule overrides
+- **Pluggable stores:** memory, SQLite, Redis, and custom `RateLimitStore` implementations
+- **Production controls:** per-route stores, fallback stores, timeouts, and failure policies
 
 ## Usage examples
 
-### Global plus login protection
-
-```ts
-import { Elysia } from 'elysia'
-import { rateLimit } from 'elysia-nazli'
-
-const app = new Elysia()
-  .use(
-    rateLimit({
-      namespace: 'my-api',
-      limit: 120,
-      window: '1m',
-      routes: {
-        'POST /login': {
-          limit: 10,
-          window: '15m',
-          ban: '5m',
-        },
-      },
-    }),
-  )
-  .post('/login', () => 'ok')
-```
-
-The `/login` route must pass both the global rule and the route rule.
-
 ### Keep limits beside routes
 
-<!-- prettier-ignore-start -->
 ```ts
 import { Elysia } from 'elysia'
 import { rateLimit } from 'elysia-nazli'
 
 const app = new Elysia()
   .use(rateLimit())
-  .post('/login', () => 'ok', {
-    rateLimit: {
-      limit: 10,
-      window: '15m',
-      ban: '5m',
-    },
-  })
+  .post('/login', { rateLimit: { limit: 10, window: '15m' } }, () => 'ok')
 ```
-<!-- prettier-ignore-end -->
 
-Use route options when local readability matters. Use plugin-level `routes` when you want early `onRequest` limiting, object maps, `RegExp` paths, or several matching rules evaluated together.
+For global limits combined with route or prefix rules, see [configuration](./docs/configuration.md).
 
-### Use Redis and rule-specific keys
+### Share counters with Redis
 
 ```ts
 import { RedisClient } from 'bun'
 import { Elysia } from 'elysia'
-import { bodyField, firstOf, ip, rateLimit, user } from 'elysia-nazli'
+import { rateLimit } from 'elysia-nazli'
 import { redisStore } from 'elysia-nazli/redis'
 
 const redis = new RedisClient('redis://localhost:6379')
 
-const app = new Elysia().use(
-  rateLimit({
-    algorithm: 'gcra',
-    key: firstOf(user('id'), ip({ trustedProxyDepth: 1 })),
-    store: redisStore({ client: redis, adapter: 'bun', prefix: 'myapp' }),
-    limit: 120,
-    window: '1m',
-    headers: {
-      standard: true,
-      legacy: false,
-    },
-    routes: {
-      'POST /login': {
-        limit: 10,
-        window: '15m',
-        ban: '5m',
-        key: bodyField('email', {
-          normalize: 'email',
-          hmacSecret: Bun.env.RATE_LIMIT_KEY_SECRET!,
-        }),
-      },
-    },
-  }),
-)
+const app = new Elysia()
+  .use(rateLimit({ limit: 120, window: '1m', store: redisStore(redis) }))
+  .get('/', () => 'ok')
 ```
 
-### Use different stores per route
-
-```ts
-import { memoryStore, rateLimit } from 'elysia-nazli'
-import { sqliteStore } from 'elysia-nazli/sqlite'
-
-rateLimit({
-  store: memoryStore(),
-  limit: 120,
-  window: '1m',
-  routes: {
-    'POST /login': {
-      limit: 10,
-      window: '15m',
-      store: sqliteStore('./limits.sqlite'),
-    },
-  },
-})
-```
+SQLite, custom stores, and per-route backends are covered in the [store guide](./docs/stores.md). For key resolvers and other setups, see [examples](./docs/examples.md).
 
 ## Compatibility
 
-- **Runtime:** Bun `>=1.3.13`
-- **Framework:** Elysia `^1.4.0`
-- **Node.js:** not a supported runtime target
+- **Bun:** `>=1.4.4`; latest stable recommended.
+- **Elysia:** `^2.0.0-rc.0`, tested with `2.0.0-rc.0`. Earlier Elysia 2 betas are outside this range.
+- **Runtime target:** Bun. Node.js is not supported.
 
-The package is Bun-first. The default import stays small, while Redis and SQLite helpers live behind `elysia-nazli/redis` and `elysia-nazli/sqlite`.
+For Elysia versions below 2, use **elysia-nazli v1**:
+
+```bash
+bun add elysia-nazli@1
+```
+
+See the [v2 migration guide](./docs/migration-v2.md) when upgrading an existing app.
+
+## Performance
+
+Measured **2026-10-24** on a **MacBook Pro M1 (2020), 16 GB RAM**, with **Bun 1.4.4 / Elysia 2.0.0-rc.0**:
+
+| Entry                             |        One key |    20,000 keys |
+| --------------------------------- | -------------: | -------------: |
+| Plain Elysia                      |   1,397k ops/s |   1,294k ops/s |
+| Elysia + three headers            |     780k ops/s |     711k ops/s |
+| **elysia-nazli v2 (development)** | **538k ops/s** | **430k ops/s** |
+
+Five-trial medians of local `app.handle()` calls, not network throughput. `elysia-rate-limit@5.1.1` is incompatible with this Elysia RC and was not measured.
+
+```bash
+bun run bench:compare
+```
+
+[Full results and methodology](./docs/benchmarks.md).
 
 ## Documentation
 
-| Guide                                              | Use it for                                                  |
-| -------------------------------------------------- | ----------------------------------------------------------- |
-| [Documentation index](./docs/README.md)            | Find the right guide quickly                                |
-| [Examples and patterns](./docs/examples.md)        | Common setups, login protection, proxy-safe IPs             |
-| [Configuration reference](./docs/configuration.md) | Options, defaults, validation, headers, route macros        |
-| [Stores and backends](./docs/stores.md)            | Memory, SQLite, Redis, custom stores                        |
-| [Algorithms and semantics](./docs/algorithm.md)    | Algorithm trade-offs, rule matching, bans, costs            |
-| [Production and resilience](./docs/production.md)  | Failure policy, fallback stores, timeouts, proxies, scaling |
+[Examples](./docs/examples.md) · [Configuration](./docs/configuration.md) · [Stores](./docs/stores.md) · [Algorithms](./docs/algorithm.md) · [Production](./docs/production.md)
+
+The [documentation index](./docs/README.md) also links to migration and benchmark details.
 
 ## Development
 
 ```bash
 bun install
-bun run typecheck
-bun run test
-bun run build
+bun run release:check
 ```
 
-Useful scripts:
-
-| Command                    | What it does                                    |
-| -------------------------- | ----------------------------------------------- |
-| `bun run test`             | Runs the test suite                             |
-| `bun run test:integration` | Runs integration tests                          |
-| `bun run typecheck`        | Checks TypeScript without emitting files        |
-| `bun run lint`             | Runs ESLint                                     |
-| `bun run format:check`     | Checks Prettier formatting                      |
-| `bun run build`            | Builds JS, declarations, and bundle size report |
-| `bun run bench`            | Runs local benchmarks                           |
-| `bun run bench:compare`    | Compares Elysia plugin request-path throughput  |
-| `bun run release:check`    | Runs typecheck, tests, and build                |
-
-## Contributing
-
-Issues are welcome for bugs, security-safe reproduction cases, and focused feature discussions. External pull requests are not accepted right now.
-
-See [CONTRIBUTING.md](./CONTRIBUTING.md) and [SECURITY.md](./SECURITY.md) before opening an issue.
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for setup, formatting, and additional commands. Bug reports and focused feature discussions are welcome; external pull requests are currently not accepted. Report security issues using [SECURITY.md](./SECURITY.md).
 
 ## License
 

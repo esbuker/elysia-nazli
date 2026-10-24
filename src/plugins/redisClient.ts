@@ -69,7 +69,7 @@ export const normalizeRedisClient = (
       }
     }
 
-    if (mode === 'ioredis' && isFunction(client.eval)) {
+    if ((mode === 'ioredis' || mode === 'bun') && isFunction(client.eval)) {
       return (client.eval as unknown as (...parts: unknown[]) => unknown).call(
         client,
         script,

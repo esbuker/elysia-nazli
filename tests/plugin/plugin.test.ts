@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { Elysia } from 'elysia'
+import { Elysia, t } from 'elysia'
 
 import { header, rateLimit } from '../../src/index'
 import type { HitResult, RateLimitStore, StoreHitInput } from '../../src/index'
@@ -121,7 +121,7 @@ describe('rateLimit plugin - request lifecycle', () => {
     expect(second.status).toBe(429)
   })
 
-  it('keeps the simple memory/header global rule on Elysia sync hook composition', async () => {
+  it('supports the simple memory/header global fast path', async () => {
     const app = new Elysia()
       .use(
         rateLimit({
@@ -139,19 +139,12 @@ describe('rateLimit plugin - request lifecycle', () => {
         headers: { 'x-client-key': 'client-a' },
       }),
     )
-    const compiled = String(app.fetch)
-    const inference = (app as unknown as { inference: Record<string, boolean> }).inference
 
+    // Verify the observable fast path without depending on generated function
+    // names or private compiler inference fields that changed in Elysia 2.
     expect(response.status).toBe(200)
-    expect(compiled.startsWith('function map(')).toBeTrue()
-    expect(compiled).not.toContain('await onRequest')
-    expect(inference.body).toBeFalse()
-    expect(inference.cookie).toBeFalse()
-    expect(inference.headers).toBeFalse()
-    expect(inference.query).toBeFalse()
-    expect(inference.server).toBeFalse()
-    expect(inference.path).toBeFalse()
-    expect(inference.set).toBeTrue()
+    expect(response.headers.get('ratelimit-limit')).toBe(String(Number.MAX_SAFE_INTEGER))
+    expect(response.headers.get('ratelimit-remaining')).toBe(String(Number.MAX_SAFE_INTEGER - 1))
   })
 
   it('is a no-op when no rules are configured (no headers, no decisions made)', async () => {
@@ -241,13 +234,17 @@ describe('rateLimit plugin - request lifecycle', () => {
         }),
       )
       .get('/open', () => 'ok')
-      .post('/login', () => 'ok', {
-        rateLimit: {
-          limit: 1,
-          window: '1m',
-          ban: '5m',
+      .post(
+        '/login',
+        {
+          rateLimit: {
+            limit: 1,
+            window: '1m',
+            ban: '5m',
+          },
         },
-      })
+        () => 'ok',
+      )
 
     const open = await app.handle(new Request('http://localhost/open'))
     const first = await app.handle(new Request('http://localhost/login', { method: 'POST' }))
@@ -270,12 +267,16 @@ describe('rateLimit plugin - request lifecycle', () => {
           keyGenerator: () => 'client',
         }),
       )
-      .get('/users/:id', ({ params }) => params.id, {
-        rateLimit: {
-          limit: 1,
-          window: '1m',
+      .get(
+        '/users/:id',
+        {
+          rateLimit: {
+            limit: 1,
+            window: '1m',
+          },
         },
-      })
+        ({ params }) => params.id,
+      )
 
     const first = await app.handle(new Request('http://localhost/users/1'))
     const second = await app.handle(new Request('http://localhost/users/2'))
@@ -891,5 +892,108 @@ describe('rateLimit plugin - cleanup lifecycle', () => {
     })
     await app.stop()
     expect(closed).toBe(1)
+  })
+})
+
+describe('Elysia 2 integration', () => {
+  it('composes limiter hooks while the last limiter supplies route macro defaults', async () => {
+    const calls: string[] = []
+    const app = new Elysia()
+      .use(
+        rateLimit({
+          namespace: 'first',
+          limit: 100,
+          window: '1m',
+          cleanupInterval: 0,
+          keyGenerator: () => 'client',
+          onDecision: ({ decisions }) => {
+            calls.push(decisions[0]!.key)
+          },
+        }),
+      )
+      .use(
+        rateLimit({
+          namespace: 'second',
+          cleanupInterval: 0,
+          keyGenerator: () => 'client',
+          onDecision: ({ decisions }) => {
+            calls.push(decisions[0]!.key)
+          },
+        }),
+      )
+      .post(
+        '/login',
+        {
+          body: t.Object({ email: t.String() }),
+          rateLimit: { limit: 1, window: '1m' },
+        },
+        ({ body }) => body.email,
+      )
+
+    const request = () =>
+      new Request('http://localhost/login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: 'client@example.com' }),
+      })
+    const first = await app.handle(request())
+    const second = await app.handle(request())
+
+    expect(await first.text()).toBe('client@example.com')
+    expect(first.headers.get('ratelimit-limit')).toBe('1')
+    expect(second.status).toBe(429)
+    expect(calls).toEqual([
+      'first:global:client',
+      'second:route:POST /login:client',
+      'first:global:client',
+      'second:route:POST /login:client',
+    ])
+  })
+
+  it('uses the host app error lifecycle for request hook errors (issue #2)', async () => {
+    const app = new Elysia()
+      .use(
+        rateLimit({
+          limit: 10,
+          window: '1m',
+          cleanupInterval: 0,
+          skip: () => {
+            throw new Error('request-hook-error')
+          },
+        }),
+      )
+      .onError('global', ({ error }) => {
+        return new Response(error instanceof Error ? error.message : 'unexpected', { status: 503 })
+      })
+      .get('/', () => 'ok')
+    const response = await app.handle(new Request('http://localhost/'))
+
+    expect(response.status).toBe(503)
+    expect(await response.text()).toBe('request-hook-error')
+  })
+
+  it('preserves multiple Set-Cookie values on custom limited responses', async () => {
+    const app = new Elysia()
+      .use(
+        rateLimit({
+          limit: 1,
+          window: '1m',
+          cleanupInterval: 0,
+          keyGenerator: () => 'client',
+          onLimit: ({ context }) => {
+            context.set.headers['set-cookie'] = ['first=1; Path=/', 'second=2; Path=/']
+
+            return new Response('blocked')
+          },
+        }),
+      )
+      .get('/', () => 'ok')
+
+    await app.handle(new Request('http://localhost/'))
+    const blocked = await app.handle(new Request('http://localhost/'))
+
+    expect(blocked.status).toBe(429)
+    expect(blocked.headers.getSetCookie()).toEqual(['first=1; Path=/', 'second=2; Path=/'])
+    expect(blocked.headers.get('ratelimit-remaining')).toBe('0')
   })
 })

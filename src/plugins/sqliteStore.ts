@@ -86,9 +86,7 @@ export class SqliteRateLimitStore implements RateLimitStore {
     this.txHit = this.db.transaction((input: StoreHitInput) => {
       const { key, now } = input
       const row = select.get(key) as
-        | { count: number; resetAt: number; banUntil: number }
-        | null
-        | undefined
+        { count: number; resetAt: number; banUntil: number } | null | undefined
       const evaluated = evaluateFixedWindowHit(input, row ?? null)
       const { count, resetAt, banUntil = 0 } = evaluated.state
 

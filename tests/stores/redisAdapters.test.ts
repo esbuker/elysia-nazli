@@ -86,6 +86,34 @@ describe('redisStore adapter portability', () => {
     expect(evalCalls[0]![2]).toBe('nazli:{k}:counter')
   })
 
+  it('uses Bun 1.4 native eval(script, numKeys, ...keysAndArgs) in auto mode', async () => {
+    const evalCalls: unknown[][] = []
+    const client = {
+      send: async () => {
+        throw new Error('native eval should be preferred')
+      },
+      eval: async (script: string, numKeys: number, ...parts: (string | number)[]) => {
+        evalCalls.push([script, numKeys, ...parts])
+
+        return [1, 1000, 0]
+      },
+    }
+    const store = redisStore({ client })
+    const result = await store.hit({ key: 'k', limit: 2, window: 1000, cost: 1, now: 1000 })
+
+    expect(result.count).toBe(1)
+    expect(evalCalls).toHaveLength(1)
+    expect(evalCalls[0]!.slice(1)).toEqual([
+      2,
+      'nazli:{k}:counter',
+      'nazli:{k}:ban',
+      '1',
+      '2',
+      '1000',
+      '0',
+    ])
+  })
+
   it('supports node-redis sendCommand() for atomic EVAL when eval() is absent', async () => {
     const commands: string[][] = []
     const client: RedisClientLike = {
@@ -295,7 +323,7 @@ describe('redisStore adapter portability', () => {
     expect(ttls.get('p:{k}:sliding:w:0')).toBe(2000)
   })
 
-  it('uses Lua for GCRA when eval is available', async () => {
+  it('uses the custom array-based Lua API for GCRA', async () => {
     const evalCalls: { keys: string[]; args: (string | number)[] }[] = []
     const client: RedisClientLike = {
       incrby: async () => 1,
@@ -303,13 +331,13 @@ describe('redisStore adapter portability', () => {
       pttl: async () => 1000,
       psetex: async () => 'OK',
       get: async () => null,
-      eval: async (_script, keys, args) => {
+      eval: async (_script: string, keys: string[], args: (string | number)[]) => {
         evalCalls.push({ keys, args })
 
         return [0, 1, 500, 0, 0, 1]
       },
     }
-    const store = redisStore({ client, prefix: 'p', adapter: 'bun' })
+    const store = redisStore({ client, prefix: 'p', adapter: 'custom' })
     const result = await store.algorithmHit!({
       key: 'k',
       limit: 2,

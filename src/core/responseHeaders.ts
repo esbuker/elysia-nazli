@@ -1,3 +1,4 @@
+import type { Context } from 'elysia'
 import type { CompiledRule, RateLimitDecision } from '../types'
 import { shouldUseHeaderFamily } from '../utilities'
 import { SECOND } from './constants'
@@ -28,7 +29,7 @@ export const setRateLimitHeaders = ({
   standardAllowed,
   legacyAllowed,
 }: {
-  headers: Record<string, string | number>
+  headers: Context['set']['headers']
   decision: RateLimitDecision
   resetSeconds: number
   standardAllowed: boolean

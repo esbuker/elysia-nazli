@@ -307,7 +307,10 @@ const makeAtomicFake = () => {
 
       return 'OK'
     },
-    eval: async (script, keys, args) => {
+    eval: async (script: string, numKeys: number, ...parts: (string | number)[]) => {
+      const keys = parts.slice(0, numKeys).map(String)
+      const args = parts.slice(numKeys).map(Number)
+
       evalCalls.push({ script, keys, args })
 
       return runAtomic(
@@ -442,16 +445,20 @@ describe('createRedisStore - atomic Lua path', () => {
   it('retries atomic mode after transient EVAL failures', async () => {
     const fake = makeAtomicFake()
     let evalAttempts = 0
-    const originalEval = fake.client.eval!
+    const originalEval = fake.client.eval as (
+      script: string,
+      numKeys: number,
+      ...parts: (string | number)[]
+    ) => Promise<unknown>
 
-    fake.client.eval = async (...args) => {
+    fake.client.eval = async (script: string, numKeys: number, ...parts: (string | number)[]) => {
       evalAttempts++
 
       if (evalAttempts === 1) {
         throw new Error('ECONNRESET')
       }
 
-      return originalEval(...args)
+      return originalEval(script, numKeys, ...parts)
     }
 
     const store = createRedisStore({ client: fake.client, prefix: 'p' })

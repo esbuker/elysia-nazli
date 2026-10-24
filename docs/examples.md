@@ -62,14 +62,18 @@ Use the Elysia route option when you want the limiter to live beside a route def
 import { Elysia } from 'elysia'
 import { rateLimit } from 'elysia-nazli'
 
-const app = new Elysia().use(rateLimit()).post('/login', () => 'ok', {
-  rateLimit: {
-    limit: 10,
-    window: '15m',
-    algorithm: 'gcra',
-    ban: '5m',
+const app = new Elysia().use(rateLimit()).post(
+  '/login',
+  {
+    rateLimit: {
+      limit: 10,
+      window: '15m',
+      algorithm: 'gcra',
+      ban: '5m',
+    },
   },
-})
+  () => 'ok',
+)
 ```
 
 Route-option rules run during Elysia `beforeHandle`, after Elysia has matched the route. Their generated id uses the registered route pattern, such as `route:POST /users/:id`.
