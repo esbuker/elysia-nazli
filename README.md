@@ -52,7 +52,7 @@ const app = new Elysia()
   .listen(3000)
 ```
 
-Each client key gets 120 requests per minute. Defaults are an in-memory fixed window and standard `ratelimit-*` headers.
+By default, each IP gets 120 requests per minute. Requests over the limit receive `429 Too Many Requests` with a `Retry-After` header. Counters use an in-memory fixed window, and standard `ratelimit-*` headers are enabled.
 
 ## Features
 
@@ -68,6 +68,25 @@ Each client key gets 120 requests per minute. Defaults are an in-memory fixed wi
 
 ## Usage examples
 
+### Global limit with tighter routes
+
+```ts
+rateLimit({
+  namespace: 'my-api',
+  limit: 120,
+  window: '1m',
+  routes: {
+    'POST /login': {
+      limit: 10,
+      window: '15m',
+      ban: '5m',
+    },
+  },
+})
+```
+
+Each client gets 120 requests per minute globally. `POST /login` must also pass the 10-per-15-minute rule, with a five-minute ban when that limit is exceeded.
+
 ### Keep limits beside routes
 
 ```ts
@@ -82,6 +101,8 @@ const app = new Elysia()
 For global limits combined with route or prefix rules, see [configuration](./docs/configuration.md).
 
 ### Share counters with Redis
+
+Memory counters are local to each process. Use Redis to share limits across multiple app instances.
 
 ```ts
 import { RedisClient } from 'bun'
