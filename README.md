@@ -5,7 +5,7 @@
 
 Tiny, graceful rate limiting for [Elysia](https://elysiajs.com) apps running on [Bun](https://bun.sh).
 
-`elysia-nazli` starts simple: add one limit, protect your routes, and move on. When your API needs more care, it grows with you through route rules, composed keys, shared stores, and smoother algorithms.
+`elysia-nazli` starts simple: add one limit, protect your routes, and get back to building. When your API needs a little more care, it grows with you through route rules, keys that fit your app, shared stores, and finer control over traffic.
 
 > **Nazlı** means “delicate” and “graceful” in Turkish, with just enough fussiness to keep traffic in line.
 >
@@ -26,13 +26,15 @@ Built for real services where a single global limit just doesn’t cut it.
 
 ## Why use it
 
-Use `elysia-nazli` when your Elysia app needs rate limits that are clear to configure and strict enough for real traffic:
+Your homepage and your login endpoint probably shouldn't have the same limit. Neither should every client have to share one counter.
 
-- Start with one global limit in a few lines.
-- Add tighter limits for login, signup, webhooks, or expensive endpoints.
-- Choose how clients are identified: IP, user id, header, custom logic, or a composed key.
-- Keep state in memory, SQLite, Redis, or your own store.
-- Decide how your API behaves when the backing store is slow or unavailable.
+`elysia-nazli` lets you describe those differences in plain TypeScript:
+
+- **Start small.** Add one global limit with `.use(rateLimit(...))`.
+- **Give sensitive routes extra care.** Set tighter limits for logins, signups, or expensive requests.
+- **Choose who gets a counter.** Identify clients by IP, user ID, a header, or your own logic.
+- **Keep your rules as you grow.** Use memory, SQLite, Redis, or your own store.
+- **Handle store failures deliberately.** Choose timeouts, a fallback store, and whether requests pass or fail when a store is unavailable.
 
 ## Quick start
 
@@ -52,23 +54,27 @@ const app = new Elysia()
   .listen(3000)
 ```
 
-By default, each IP gets 120 requests per minute. Requests over the limit receive `429 Too Many Requests` with a `Retry-After` header. Counters use an in-memory fixed window, and standard `ratelimit-*` headers are enabled.
+That's 120 requests per minute for each IP. Go over the limit and the API responds with `429 Too Many Requests` and a `Retry-After` header telling the client when to try again.
+
+Counters stay in memory by default, using a fixed window. Standard `ratelimit-*` headers are enabled so clients can see their remaining allowance.
 
 ## Features
 
-- **Global, prefix, and route rules** with string or `RegExp` paths
-- **Elysia route options** to keep limits beside your handlers
-- **Human duration strings** such as `'30s'`, `'15m'`, and `'2h'`
-- **Method-aware limits and ban windows** for tighter control
-- **Four algorithms:** fixed-window, sliding-window, token-bucket, and GCRA
-- **Composable keys:** `ip`, `user`, `header`, `bodyField`, `firstOf`, `compose`, `hmac`, and `custom`
-- **Standard and legacy headers** with per-rule overrides
-- **Pluggable stores:** memory, SQLite, Redis, and custom `RateLimitStore` implementations
-- **Production controls:** per-route stores, fallback stores, timeouts, and failure policies
+- **Rules where you need them** — global defaults, path prefixes, exact routes, or `RegExp` matches
+- **Limits beside your handlers** — configure `rateLimit` directly in Elysia route options
+- **Durations you can read** — `'30s'`, `'15m'`, and `'2h'`
+- **Extra care for sensitive endpoints** — match HTTP methods and set temporary bans
+- **Four algorithms** — fixed-window, sliding-window, token-bucket, and GCRA
+- **Keys that fit your app** — identify by IP, user, header, or body field; combine resolvers or write your own
+- **Headers for your clients** — standard and legacy rate-limit headers, with per-rule overrides
+- **Your choice of store** — memory, SQLite, Redis, or a custom `RateLimitStore`
+- **Control when a store struggles** — per-route stores, fallback stores, timeouts, and failure policies
 
 ## Usage examples
 
 ### Global limit with tighter routes
+
+Give the API a general limit, then add a stricter rule for login attempts:
 
 ```ts
 rateLimit({
@@ -85,9 +91,11 @@ rateLimit({
 })
 ```
 
-Each client gets 120 requests per minute globally. `POST /login` must also pass the 10-per-15-minute rule, with a five-minute ban when that limit is exceeded.
+Each IP gets 120 requests per minute across the app. Login attempts also count toward a separate limit of 10 every 15 minutes, with a five-minute ban when that limit is exceeded. Both rules apply.
 
 ### Keep limits beside routes
+
+Prefer to read a route and its limit together? Use Elysia's route options:
 
 ```ts
 import { Elysia } from 'elysia'
@@ -117,7 +125,24 @@ const app = new Elysia()
   .get('/', () => 'ok')
 ```
 
-SQLite, custom stores, and per-route backends are covered in the [store guide](./docs/stores.md). For key resolvers and other setups, see [examples](./docs/examples.md).
+### Bring your own store
+
+Memory, SQLite, and Redis are just the starting point. Connect your own backend through `RateLimitStore` and pass it as `store`. Your route rules stay the same, wherever your counters live.
+
+```ts
+import { rateLimit, type RateLimitStore } from 'elysia-nazli'
+import { hitCounter } from './my-counter-backend'
+
+const store: RateLimitStore = {
+  hit: (input) => hitCounter(input),
+}
+
+rateLimit({ limit: 120, window: '1m', store })
+```
+
+`hitCounter` is your backend code: it updates the counter and returns a `HitResult`, synchronously or asynchronously.
+
+[Build a custom store](./docs/stores.md#custom-store), or explore SQLite and per-route backends in the [store guide](./docs/stores.md). For key resolvers and other setups, see [examples](./docs/examples.md).
 
 ## Compatibility
 
@@ -137,11 +162,11 @@ See the [v2 migration guide](./docs/migration-v2.md) when upgrading an existing 
 
 Measured **2026-10-24** on a **MacBook Pro M1 (2020), 16 GB RAM**, with **Bun 1.4.4 / Elysia 2.0.0-rc.0**:
 
-| Entry                             |        One key |    20,000 keys |
-| --------------------------------- | -------------: | -------------: |
-| Plain Elysia                      |   1,397k ops/s |   1,294k ops/s |
-| Elysia + three headers            |     780k ops/s |     711k ops/s |
-| **elysia-nazli v2 (development)** | **538k ops/s** | **430k ops/s** |
+| Entry                  |        One key |    20,000 keys |
+| ---------------------- | -------------: | -------------: |
+| Plain Elysia           |   1,397k ops/s |   1,294k ops/s |
+| Elysia + three headers |     780k ops/s |     711k ops/s |
+| **elysia-nazli v2**    | **538k ops/s** | **430k ops/s** |
 
 Five-trial medians of local `app.handle()` calls, not network throughput. `elysia-rate-limit@5.1.1` is incompatible with this Elysia RC and was not measured.
 
